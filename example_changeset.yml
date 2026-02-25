@@ -1,0 +1,28 @@
+
+name: Add lodash utility and enable debug mode
+
+steps:
+  - name: Install dependencies
+    run: npm install lodash
+  - name: Add import and enable debug
+    patch: |
+      --- a/src/utils.js
+      +++ b/src/utils.js
+      @@ -1,3 +1,5 @@
+      +import _ from 'lodash';
+      +
+       export function formatDate(date) {
+         return date.toISOString();
+       }
+      --- a/config/app.json
+      +++ b/config/app.json
+      @@ -1 +1,3 @@
+      -{}
+      +{
+      +  "debug": true
+      +}
+  - name: Generate types
+    run: npx some-tool generate
+  - name: Lint
+    run: npm run lint
+  
