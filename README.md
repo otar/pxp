@@ -1,3 +1,6 @@
+
+<img src="logo.png" width="400">
+
 # PXP — Plan eXecution Protocol
 
 **Your agent already figured it out. Stop feeding tokens to `cat`-ing and `ls`-ing.**
