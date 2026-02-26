@@ -1,4 +1,7 @@
 
+> [!CAUTION]
+> This project is currently in an **experimental** stage and under active development. APIs, features, and functionality may change without notice.  Please report any issues you encounter.
+
 <img src="logo.png" width="400">
 
 # PXP — Plan eXecution Protocol
