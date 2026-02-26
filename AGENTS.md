@@ -19,3 +19,4 @@ Rules:
 - Multiple files can be included in a single patch step
 - Step `name` is optional but recommended for clarity
 - The changeset is applied with: `./pxp.sh changeset.yml`
+- Avoid blank context lines: anchor hunks on non-blank lines only. Represent blank lines in the diff as explicit `+` additions, never as context.
