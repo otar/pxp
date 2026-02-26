@@ -159,6 +159,7 @@ Rules:
 - Minimum 3 context lines per hunk
 - Multiple files can be included in a single patch step
 - The changeset is applied with: ./pxp.sh changeset.yml
+- Avoid blank context lines: anchor hunks on non-blank lines only. Represent blank lines in the diff as explicit `+` additions, never as context.
 ```
 
 ### 3. Work normally, execute instantly
