@@ -1,0 +1,39 @@
+{
+  "name": "pxp",
+  "version": "2.0.0",
+  "description": "Plan eXecution Protocol — deterministic, zero-token changeset executor for LLM-authored code changes",
+  "type": "module",
+  "bin": {
+    "pxp": "bin/pxp.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "PROMPT.md",
+    "SPEC.md",
+    "README.md",
+    "integrations"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "llm",
+    "changeset",
+    "codegen",
+    "agent",
+    "patch",
+    "diff",
+    "search-replace"
+  ],
+  "license": "MIT",
+  "author": "Otar Chekurishvili",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/otar/pxp.git"
+  },
+  "dependencies": {}
+}

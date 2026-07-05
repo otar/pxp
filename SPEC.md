@@ -1,251 +1,172 @@
-
 # PXP — Plan eXecution Protocol
 
-- **Version:** 0.1.0
-- **Status:** Draft
+- **Version:** 2.0.0
+- **Status:** Normative
 - **Author:** Otar Chekurishvili
 
 ## Abstract
 
-PXP (Plan eXecution Protocol) is a specification for separating LLM-based code planning from deterministic code execution. The protocol defines a structured format for code change plans that can be executed by simple CLI tools without requiring LLM inference during execution.
+PXP separates LLM-based code *planning* from deterministic code *execution*. A
+model emits a **changeset** describing a set of file operations; a deterministic
+executor applies it with zero further model calls. PXP v2 uses a fenced-Markdown
+carrier with `SEARCH`/`REPLACE` blocks — a format frontier models emit reliably
+— and applies it with a whitespace-normalized exact matcher that fails loudly
+rather than ever misapplying.
 
-## Background
+This is a breaking change from v1 (YAML + unified diffs). There is no
+compatibility path.
 
-Current LLM-based coding assistants use a ReAct-style loop where the LLM reasons, calls a tool, observes the result, and repeats. This approach has several drawbacks:
+## Design priorities (in order)
 
-- **Token Inefficiency**: Full conversation history is sent with each LLM call
-- **Latency**: Each tool use requires a round-trip to the LLM
-- **Unpredictability**: The LLM may take different paths on the same task
-- **Cost**: Complex tasks can consume hundreds of thousands of tokens
-
-## The PXP Approach
-
-PXP inverts this model:
-
-1. **Plan**: LLM analyzes the task and generates a complete execution plan
-2. **Execute**: A deterministic executor runs the plan without LLM involvement
-
-For code editing tasks, the output is the file changes themselves, not a natural language synthesis. Once a plan is validated, execution is mechanical: apply patches, run commands, check exit codes. No intelligence is required during execution.
-
-### Goals
-
-- **Deterministic execution:** Given the same plan, execution produces identical results.
-- **Token efficiency:** Eliminate LLM token usage during the execution phase.
-
-### Non-Goals
-
-- Defining how LLMs should generate plans (PXP only specifies the output format).
-- Conflict resolution or merge strategies.
-- PXP does not handle tasks requiring dynamic response to execution results.
-- Open-ended analysis, tasks like "review this code" without concrete outputs are out of scope
+1. Frontier-model emission reliability.
+2. Impossibility of silent misapplication — failing to apply is acceptable;
+   applying to the wrong place is not.
+3. Node parsing simplicity.
+4. Token compactness.
 
 ## Terminology
 
-- **Changeset:** A single `.yml` file conforming to this specification.
-- **Step:** An atomic unit of work within a changeset. Either a `run` step or a `patch` step.
-- **Executor:** A program that parses and executes a changeset file.
+- **Changeset** — a single `.pxp.md` file conforming to this spec.
+- **Op** — one operation: `edit`, `create`, `delete`, `rename`, or `run`.
+- **Executor** — a program that parses and applies a changeset (the `pxp` CLI).
 
-## Changeset Format
+## Carrier: fenced Markdown
 
-A changeset is a YAML file with the following structure:
+A changeset is Markdown-carried, not YAML/JSON, because arbitrary source code
+(tabs, backticks, mixed indentation) must survive verbatim. Every code payload
+is wrapped in a fence of backticks whose length is **longer than the longest
+backtick run inside the payload, minimum 4**. The parser detects fence length
+from the opening fence and scans to a closing run of at least that length at the
+start of a line. This makes the format safe for payloads that themselves contain
+fenced code.
 
-```yaml
-name: <optional changeset name>
-steps:
-  - name: <optional step name>
-    run: <shell command>
-  - name: <optional step name>
-    patch: |
-      <unified diff>
-```
+The parser is a hand-rolled, single-pass, line-based reader of this dialect — not
+a general Markdown parser.
 
-Shortened version without name fields:
-
-```yaml
-steps:
-  - run: <shell command>
-  - patch: |
-      <unified diff>
-```
-
-### Fields
-
-#### `name` (optional required)
-
-A short, human-readable description of the changeset. Displayed by the Executor at the start of execution.
-
-```yaml
-name: Add authentication middleware and install dependencies
-```
-
-#### `steps` (required)
-
-An ordered list of steps. Steps execute sequentially from top to bottom. Execution halts on the first failure.
-
-A step consists of an optional `name` field (a short, human-readable description of the step) and a step type.
-
-There are exactly two step types: `run` and `patch`.
-
-### Step Types
-
-#### `run`
-
-Executes a shell command via the system shell.
-
-```yaml
-- run: npm install lodash
-```
-
-The Executor invokes the command using `eval`. The step succeeds if the command exits with code `0`. Any non-zero exit code is a failure.
-
-#### `patch`
-
-Applies a unified diff to one or more files using `git apply`.
-
-```yaml
-- patch: |
-    --- a/src/utils.js
-    +++ b/src/utils.js
-    @@ -1,3 +1,5 @@
-    +import abc from 'example';
-    +
-     export function doSomething(value) {
-       return abc(value);
-     }
-```
-
-The patch body is a YAML block scalar (indicated by `|`) indented under the step. The Executor strips the YAML indentation before passing the content to `git apply`.
-
-Patch rules:
-
-- Standard unified diff format with `--- a/path` and `+++ b/path` headers.
-- All paths are relative to the repository root.
-- Each hunk must include a minimum of 3 context lines.
-- A single patch step may contain diffs for multiple files, concatenated sequentially.
-- The Executor validates the patch with `git apply --check` before applying. If the check fails, the step fails.
-
-### Multi-file patches
-
-Multiple files can be modified in a single patch step by concatenating their diffs:
-
-```yaml
-- patch: |
-    --- a/src/utils.js
-    +++ b/src/utils.js
-    @@ -1,3 +1,5 @@
-    +import _ from 'lodash';
-    +
-     export function formatDate(date) {
-       return date.toISOString();
-     }
-    --- a/config/app.json
-    +++ b/config/app.json
-    @@ -1 +1,3 @@
-    -{}
-    +{
-    +  "debug": true
-    +}
-```
-
-## Execution Semantics
-
-1. The Executor reads the changeset file.
-2. The Executor extracts and displays the `name` field if present.
-3. The Executor iterates through `steps` in order.
-4. For each step:
-   - Display the `name` field if present.
-   - `run`: Execute the command. If exit code ≠ 0, halt.
-   - `patch`: Validate with `git apply --check`. If invalid, halt. Otherwise apply with `git apply`.
-5. If all steps complete, the Executor exits with code `0`.
-6. If any step fails, the Executor exits with a non-zero code. No subsequent steps execute.
-
-### Guarantees
-
-- Steps execute in strict declaration order.
-- A failed step prevents all subsequent steps from executing.
-- A patch is validated before it is applied (no partial application on check failure).
-- The Executor does not modify the changeset file.
-
-### Requirements
-
-- The working directory must be inside a git repository.
-- `git` must be available on `PATH`.
-- `bash` must be available (version 3.2+).
-
-## Example
-
-```yaml
-name: Add lodash utility and enable debug mode
-
-steps:
-  - name: Install package
-    run: npm install lodash
-  - name: Apply changes
-    patch: |
-      --- a/src/utils.js
-      +++ b/src/utils.js
-      @@ -1,3 +1,5 @@
-      +import _ from 'lodash';
-      +
-       export function formatDate(date) {
-         return date.toISOString();
-       }
-      --- a/config/app.json
-      +++ b/config/app.json
-      @@ -1 +1,3 @@
-      -{}
-      +{
-      +  "debug": true
-      +}
-  - run: npx some-tool generate
-  - name: Lint the JS files
-    run: npm run lint
-```
-
-Execution:
+## Document structure
 
 ```
-▶ Changeset: Add lodash utility and enable debug mode
+# PXP Changeset
 
-[1] run: Install package
-  ✓ Done
-[2] patch: Apply changes
-  ✓ Done
-[3] run: npx some-tool generate
-  ✓ Done
-[4] run: Lint the JS files
-  ✓ Done
+pxp: 2
+title: <one line>
+intent: <1–3 sentences, free prose>
 
-✓ All 4 steps completed.
+## Op 1: edit — path/to/file
+
+<optional rationale prose>
+
+SEARCH
+<fence>
+<verbatim block copied from the file>
+<fence>
+REPLACE
+<fence>
+<the new block>
+<fence>
+
+## Op 2: create — path/to/new
+
+<fence>
+<full file content>
+<fence>
+
+## Op 3: rename — old/path -> new/path
+
+## Op 4: delete — path/to/remove
+
+## Op 5: run — label
+
+<fence>
+shell command
+<fence>
+expect_exit: 0
 ```
 
-## LLM Integration
+### Header
 
-PXP is designed to be generated by LLMs as part of a code planning workflow. The following instruction, placed in a `AGENTS.md`/`CLAUDE.md` file or equivalent system prompt, directs an LLM to produce PXP changesets:
+Line-based `key: value` pairs before the first op. Recognized keys: `pxp`
+(must be `2`), `title`, `intent`. Unknown keys produce a validation warning.
 
-```markdown
-When implementing changes or presenting a finalized plan for implementation, do not edit files directly. Instead, generate a single `changeset.yml` changeset file using the PXP format.
+### Op headers
 
-Format:
-  name: Changeset short description
-  steps:
-    - name: Step short description
-      run: shell commands for dependencies, tooling, verification
-    - name: Step short description
-      patch: | unified diffs for code changes
+`## Op N: <type> — <path>`. The separator may be an em-dash (—), en-dash (–), or
+hyphen (-). For `rename`, the path is `<from> -> <to>` (arrow `->` or `→`). The
+heading level and the `N` are advisory; ops apply in document order.
 
-Rules:
-- Steps execute sequentially: `run` for shell commands, `patch` for unified diffs
-- Patches use standard unified diff format, paths relative to project root
-- Minimum 3 context lines per hunk
-- Multiple files can be included in a single patch step
-- The changeset is applied with: ./pxp.sh changeset.yml
-```
+### Op payloads
 
-## File Extension
+- `edit` — exactly one `SEARCH` fenced block then one `REPLACE` fenced block.
+  The keyword lines are bare (`SEARCH`) or heading-prefixed (`### SEARCH`).
+- `create` — one fenced block: the full file content.
+- `run` — one fenced block (the command) and an optional `expect_exit: N`
+  (default `0`).
+- `delete`, `rename` — no payload.
 
-PXP changesets use the `.yml` extension. The recommended default filename is `changeset.yml`.
+Prose between an op header and its first fence is rationale: preserved for the
+report, ignored by the executor.
 
-## Versioning
+## Matching semantics (`edit`)
 
-This specification follows semantic versioning. The version is declared in the document header. Executors should not enforce version checks at this stage.
+For each `edit`, in order:
+
+1. Read the target file. Missing → `E_FILE_NOT_FOUND`.
+2. Normalize both file and SEARCH: CRLF→LF, strip trailing whitespace per line.
+   Leading whitespace is **not** normalized yet.
+3. **Pass 1 — byte-exact** (post-normalization): count occurrences of SEARCH.
+   - Exactly 1 → apply.
+   - More than 1 → `E_AMBIGUOUS_MATCH` (all locations reported).
+   - Zero → Pass 2.
+4. **Pass 2 — indent-normalized:** strip the common leading-whitespace prefix
+   from SEARCH and from each candidate window, then compare. On a unique match,
+   apply REPLACE re-based to the window's indentation (REPLACE's own base indent
+   is stripped and the window's prefix prepended, preserving REPLACE's internal
+   relative indentation). Recorded as `fuzz: indent`.
+   - More than 1 → `E_AMBIGUOUS_MATCH`. Zero → `E_NO_MATCH`.
+5. There is **no Pass 3.** No similarity/fuzzy/edit-distance matching exists.
+   `--strict` disables Pass 2 (byte-exact only).
+
+An empty REPLACE block deletes the matched region. Multiple edits on one file
+apply top-to-bottom, each seeing the previous op's result. REPLACE bytes are
+written verbatim (trailing whitespace preserved); normalization only ever affects
+comparison, never written content.
+
+## Other ops
+
+- **create** — fails if the path exists (`E_EXISTS`); creates parent dirs;
+  content written with LF endings.
+- **delete** — fails if missing; stages the deletion (`git rm`).
+- **rename** — `git mv`; fails if source missing or dest exists.
+- **run** — executed via `bash -c` at the repo root, inheriting env and streaming
+  output. A non-matching exit code fails the op. Because `run` executes arbitrary
+  commands, `pxp apply` refuses run ops unless `--allow-run` is given.
+
+## Execution flow
+
+1. **Preflight** — must be inside a git repo with a clean working tree
+   (`git status --porcelain` empty, ignoring the changeset file itself), else
+   `E_DIRTY_TREE`. Record `HEAD` as the checkpoint.
+2. **Dry-run** — run the full matching algorithm for every file op against the
+   working tree before any write. Any error aborts with zero writes.
+3. **Apply** — execute ops in order; file ops write and stage, `run` ops execute.
+4. **On failure** — reset the tree hard to the checkpoint and remove created
+   files (`--keep-on-fail` disables this). `run` side effects outside the repo
+   cannot be rolled back and are reported.
+5. **On success** — commit `pxp: <title>` with `intent` in the body and a
+   `PXP-Changeset: <sha256 of the changeset file>` trailer (`--no-commit` leaves
+   changes staged).
+
+Convention: put `run` ops last. File ops are dry-run-verifiable; commands are not.
+
+## Error codes
+
+`E_FILE_NOT_FOUND`, `E_NO_MATCH`, `E_AMBIGUOUS_MATCH`, `E_EXISTS`,
+`E_DIRTY_TREE`, `E_NOT_REPO`, `E_RUN_FAILED`, `E_RUN_NOT_ALLOWED`.
+
+## Requirements
+
+- Node.js ≥ 20, `git` on `PATH`, `bash` for `run` ops (POSIX only).
+
+## File extension
+
+Changesets use `.pxp.md`. Recommended default filename: `changeset.pxp.md`.

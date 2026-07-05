@@ -1,229 +1,191 @@
 
 > [!CAUTION]
-> This project is currently in an **experimental** stage and under active development. APIs, features, and functionality may change without notice.  Please report any issues you encounter.
+> This project is in an **experimental** stage and under active development. APIs, features, and the changeset format may change without notice. Please report any issues you encounter.
 
 <img src="logo.png" width="400">
 
 # PXP — Plan eXecution Protocol
 
-**Your agent already figured it out. Stop feeding tokens to `cat`-ing and `ls`-ing.**
+**Your agent already figured out the change. Let a deterministic tool apply it — exactly, or not at all.**
 
 ---
 
-## Why
+## The idea
 
-By the time your AI agent has analyzed the codebase, asked clarifying questions, and planned the changes, it already knows what needs to happen. Which files, which lines, which commands.
-
-So why does it then spend 50,000 more tokens executing those changes one tool call at a time? It re-reads files it already understood. It feeds each result back into context. You watch a spinner and your rate limit evaporates.
+By the time an AI agent has read your code, asked its questions, and planned the
+change, it already knows what to do: which files, which lines, which commands.
+PXP captures that plan as a **changeset** and applies it with a small,
+deterministic CLI. No model runs during execution.
 
 ```
 Analyze codebase ──→ Plan changes ──→ Execute plan
-    (needs LLM)        (needs LLM)      (doesn't need LLM)
+    (needs a model)    (needs a model)   (deterministic — pxp)
 ```
 
-The reasoning *is* the hard part. Execution is mechanical. PXP makes that split explicit: the LLM outputs a changeset, a dumb bash script applies it. Zero tokens on execution. Zero waiting.
+The reasoning is the hard part. Applying the result is mechanical — and mechanical
+work should be exact, reviewable, and reversible. That is what PXP is for.
 
-## What it looks like
+## Safety first, by construction
 
-```yaml
-name: Add rate limiting to API routes
+PXP's first commitment is that a changeset **never applies to the wrong place**.
 
-steps:
-  - name: Install dependencies
-    run: npm install express-rate-limit
+- **Whitespace-normalized exact matching, and nothing fuzzier.** An `edit` finds
+  its target by exact match (ignoring trailing whitespace and line endings), then
+  by an indentation-normalized exact match. There is no similarity threshold, no
+  edit-distance fallback, no "closest guess." If the target isn't unambiguously
+  there, the apply **fails loudly** and hands back the file's real surrounding
+  lines so the model can correct itself.
+- **Ambiguity is an error.** If a SEARCH block matches two places, PXP stops and
+  tells you — it never picks one.
+- **Atomic, git-checkpointed apply.** The whole changeset is dry-run-verified
+  before a single byte is written. Any failure rolls the tree back to where it
+  started. You end up either fully applied or exactly as you were.
+- **Runs are opt-in.** A changeset can execute commands (that's how it runs your
+  tests). `pxp apply` refuses to run them unless you pass `--allow-run`.
 
-  - name: Add rate limiter middleware
-    patch: |
-      --- a/src/middleware/index.js
-      +++ b/src/middleware/index.js
-      @@ -1,4 +1,6 @@
-      +import rateLimit from 'express-rate-limit';
-      +
-       import { auth } from './auth.js';
-       import { cors } from './cors.js';
+Failing to apply is fine — you just fix the changeset and re-run. Applying to the
+wrong place is not, and PXP is built so it can't.
 
-      -export { auth, cors };
-      +export const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
-      +export { auth, cors };
+## What a changeset looks like
 
-  - name: Apply to routes
-    patch: |
-      --- a/src/routes/api.js
-      +++ b/src/routes/api.js
-      @@ -1,5 +1,7 @@
-       import express from 'express';
-      -import { auth } from '../middleware/index.js';
-      +import { auth, limiter } from '../middleware/index.js';
+````md
+# PXP Changeset
 
-       const router = express.Router();
-      +router.use(limiter);
+pxp: 2
+title: Add a request-rate limit
+intent: Cap API requests per client using a shared limiter.
 
-  - name: Verify
-    run: npm test
-```
+## Op 1: create — src/config/limits.js
 
-YAML steps. Standard unified diffs. Shell commands. Nothing you don't already know.
+````
+export const MAX_PER_MINUTE = 100;
+````
 
-## Run it
+## Op 2: edit — src/routes/api.js
+
+SEARCH
+````
+const router = express.Router();
+````
+REPLACE
+````
+const router = express.Router();
+router.use(limiter);
+````
+
+## Op 3: run — verify
+
+````
+npm test
+````
+````
+
+Five op types — `edit`, `create`, `delete`, `rename`, `run` — carried in fenced
+Markdown so that arbitrary source code (tabs, backticks, mixed indentation)
+survives verbatim.
+
+## Use it
 
 ```bash
-./pxp.sh changeset.yml
+npx pxp validate changeset.pxp.md   # parse + static checks
+npx pxp plan     changeset.pxp.md   # dry-run against your tree, no writes
+npx pxp apply    changeset.pxp.md   # apply atomically, commit on success
 ```
 
 ```
-▶ Changeset: Add rate limiting to API routes
+$ pxp plan changeset.pxp.md
+PXP: Add a request-rate limit
 
-[1] run: Install dependencies
-  ✓ Done
-[2] patch: Add rate limiter middleware
-  ✓ Done
-[3] patch: Apply to routes
-  ✓ Done
-[4] run: Verify
-  ✓ Done
+  + create src/config/limits.js
+  ~ edit   src/routes/api.js (1 match)
+  ▶ run    verify (deferred)
 
-✓ All 4 steps completed.
+Plan: 1 to create, 1 to change, 1 to run
+
+┌─ run steps (require --allow-run to apply) ─────────
+│ npm test
+└──────────────────────────────────────────
+
+Dry run only — no files were changed.
 ```
 
-Instant. No LLM in the loop. Fails fast: if step 2 breaks, step 3 never runs. Patches are validated with `git apply --check` before touching your files.
+`plan` is your review artifact — read it, then `apply --allow-run` when you're
+happy. On success PXP commits `pxp: <title>` with a `PXP-Changeset:` trailer.
 
-## Where your tokens actually go
+### Flags
 
-Here's a typical Claude Code session that edits 5 files:
+| Flag | Effect |
+|---|---|
+| `--strict` | Byte-exact matching only (disable the indent-normalized pass) |
+| `--allow-run` | Approve `run` ops non-interactively |
+| `--json <path>` | Write the machine-readable report / repair packet |
+| `--keep-on-fail` | Leave partial state on failure instead of rolling back |
+| `--no-commit` | Stage changes instead of committing (apply only) |
+| `--no-color` | Disable ANSI color |
 
-```
-[LLM call]  Read file A                           →  3,200 tokens
-[LLM call]  Read file B                           →  4,100 tokens
-[LLM call]  Read file C                           →  2,800 tokens
-[LLM call]  Plan changes                          →  1,500 tokens
-[LLM call]  Edit file A, read result              →  6,400 tokens  ← unnecessary
-[LLM call]  Edit file B, read result              →  7,200 tokens  ← unnecessary
-[LLM call]  Edit file C, read result              →  5,800 tokens  ← unnecessary
-[LLM call]  Run npm install, read output          →  3,100 tokens  ← unnecessary
-[LLM call]  Run tests, read output                →  4,500 tokens  ← unnecessary
-```
+## When an edit doesn't apply
 
-The LLM understood everything it needed by step 4. Steps 5 through 9 are the model narrating its own typing. Each call carries the full conversation history. The context window fills with tool results the model already anticipated.
-
-With PXP:
+PXP tells you exactly where it looked and what it found:
 
 ```
-[LLM call]  Read, analyze, plan                   → 11,600 tokens
-[LLM call]  Generate changeset.yml                →  1,500 tokens
-[executor]  Apply all changes                     →      0 tokens
+  ✗ edit src/calc.js — E_NO_MATCH
+      file content differs from SEARCH at 1 line(s); nearest window at line 1:
+      >    1  const total = items.sum();
+           2  return total;
 ```
 
-Same result. Fraction of the cost.
+With `--json`, the same information is emitted as a compact **repair packet**
+(capped for token budget) designed to be pasted straight back to the planning
+model, which then emits a corrected changeset for just the failed op.
 
-## Why this is better
+## Honest token economics
 
-The LLM already did the thinking. Applying a patch doesn't require intelligence, and `git apply` does it for free.
+The savings are on the **execution loop**, not the thinking. A model still reads
+and plans using tokens; PXP removes the part after that — the tool-call
+round-trips where the model re-emits edits, reads back results, and narrates its
+own typing. Prompt caching already discounts re-reads, so treat PXP as a
+determinism-and-reviewability tool that also trims execution overhead, not as a
+magic token coupon.
 
-Your context window stays clean, too. Every tool call result goes back into context. A single `cat src/big-file.ts` eats 2,000 tokens that the model carries for the rest of the session. With PXP, the window stays focused on reasoning instead of echoing file contents the model already read.
+## Tell your agent to use it
 
-Same changeset, same result. Always. The agent doesn't take a different path each time, and you don't end up with partial edits from a model that got confused halfway through.
-
-You also get to review before anything happens. The changeset *is* the review artifact. You read the diffs, you see the full sequence, you run it or you don't. Nothing touches your code until you say so.
-
-And the patches are just patches. Standard unified diffs, the same format `git diff` produces. If you can read a pull request, you can read a changeset.
-
-## Setup
-
-### 1. Get the executor
+Add the contract to your `CLAUDE.md`, `AGENTS.md`, or system prompt — or pipe it
+in directly:
 
 ```bash
-curl -o pxp.sh https://raw.githubusercontent.com/otar/pxp/main/pxp.sh
-chmod +x pxp.sh
+claude --append-system-prompt "$(pxp prompt)"
 ```
 
-Single bash script. No dependencies beyond `git` and `bash 3.2+`. Works on Linux, macOS, and Windows (Git Bash).
-
-### 2. Tell your AI to use it
-
-Add this to your `CLAUDE.md`, `AGENTS.md`, or system prompt:
-
-```markdown
-When implementing changes or presenting a finalized plan for implementation, do not edit files directly. Instead, generate a single `changeset.yml` changeset file using the PXP format.
-
-Format:
-  name: Changeset short description
-  steps:
-    - name: Step short description
-      run: shell commands for dependencies, tooling, verification
-    - name: Step short description
-      patch: | unified diffs for code changes
-
-Rules:
-- Steps execute sequentially: `run` for shell commands, `patch` for unified diffs
-- Patches use standard unified diff format, paths relative to project root
-- Minimum 3 context lines per hunk
-- Multiple files can be included in a single patch step
-- The changeset is applied with: ./pxp.sh changeset.yml
-- Avoid blank context lines: anchor hunks on non-blank lines only. Represent blank lines in the diff as explicit `+` additions, never as context.
-```
-
-### 3. Work normally, execute instantly
-
-```
-You:    "Refactor the auth module to use JWT"
-AI:     *analyzes codebase, asks questions, iterates on the plan*
-AI:     *generates changeset.yml*
-You:    *reviews the changeset*
-You:    ./pxp.sh changeset.yml   ← instant, zero tokens
-```
-
-You still iterate. You still plan. The AI still does the hard work of understanding your code. It just stops burning tokens on the part that doesn't need a brain.
-
-## Format reference
-
-```yaml
-name: Short description          # optional
-
-steps:
-  - name: Step description       # optional
-    run: npm install express      # shell command
-
-  - name: Step description       # optional
-    patch: |                      # unified diff (one or more files)
-      --- a/src/file.js
-      +++ b/src/file.js
-      @@ -1,3 +1,4 @@
-      +import foo from 'foo';
-       const bar = 1;
-```
-
-Two step types. That's the whole spec. [Read the full specification →](SPEC.md)
-
-## FAQ
-
-**Does this work with Claude Code / Cursor / Copilot / Aider?**
-Yes. Any LLM that can output YAML and unified diffs can produce PXP changesets. You just add the instruction to your system prompt or project config.
-
-**What about changes that need runtime feedback?**
-Use PXP for the parts that don't. Most implementation work (installing deps, applying patches, running codegen, linting) is predictable. If the AI genuinely needs to react to command output mid-execution, that's still a ReAct loop.
-
-**What if a patch doesn't apply?**
-`git apply --check` runs before applying. If the code changed since the plan was generated, it fails immediately with a clear error. Nothing gets partially applied.
-
-**Why not just `git apply` directly?**
-Because your changeset isn't just patches. It's `npm install`, then patches, then `npx codegen`, then `npm test`, all sequenced in one reviewable file.
-
-**Is this like Terraform plan/apply?**
-Same philosophy, much smaller scope. PXP is specifically for AI-generated code changes. Two step types, standard diffs, plain YAML.
+`pxp prompt` prints [`PROMPT.md`](PROMPT.md), the normative planner contract. A
+reference Claude Code integration lives in
+[`integrations/claude-code/`](integrations/claude-code/).
 
 ## Project
 
 | File | Description |
 |---|---|
-| [`pxp.sh`](pxp.sh) | The executor (single bash script, no dependencies) |
-| [`SPEC.md`](SPEC.md) | Full format specification |
-| [`test_pxp.sh`](test_pxp.sh) | Test suite (17 tests, 59 assertions) |
-| [`example-changeset.yml`](example-changeset.yml) | Example changeset |
-| [`CLAUDE.md`](CLAUDE.md) | Drop-in instructions for Claude Code |
-| [`AGENTS.md`](AGENTS.md) | Drop-in instructions for AI Agents |
+| [`bin/pxp.js`](bin/pxp.js) | CLI entry point |
+| [`src/`](src/) | Parser, matcher, executor, reports (zero runtime deps) |
+| [`SPEC.md`](SPEC.md) | Normative format specification |
+| [`PROMPT.md`](PROMPT.md) | Planner prompt contract (`pxp prompt`) |
+| [`CLAUDE.md`](CLAUDE.md) · [`AGENTS.md`](AGENTS.md) | Drop-in agent instructions |
+| [`test/`](test/) | `node:test` suite incl. adversarial fixtures |
+
+## FAQ
+
+**What if the code changed since the plan was written?**
+The `edit` fails with `E_NO_MATCH` and a repair packet. Nothing is partially
+applied. You regenerate the changeset (or just the failed op) and re-run.
+
+**Does this work with Claude Code / Cursor / Copilot / Aider?**
+Any model that can emit fenced Markdown can produce a PXP changeset. Add the
+contract from `pxp prompt` to its system prompt.
+
+**Is this like Terraform plan/apply?** Same philosophy, much smaller scope:
+plan, review, apply, deterministic every time.
 
 ---
 
-Happy prompting! May your tokens be well-spent!
+MIT licensed. Happy prompting — may your tokens be well spent.
 
 [Otar](https://otar.me)
