@@ -158,7 +158,7 @@ jobs:
           cp install.sh dist/install.sh
           cp schema/pxp-v1.schema.json dist/pxp-v1.schema.json
           cd dist
-          sha256sum *.tar.gz *.spdx.json install.sh pxp-v1.schema.json > SHA256SUMS
+          sha256sum -- *.tar.gz *.spdx.json install.sh pxp-v1.schema.json > SHA256SUMS
       - name: Attest release assets
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
