@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Verify release tag and ancestry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          tag_type=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq .object.type)
+          [[ "$tag_type" == tag ]]
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          grep -F "## [${TAG#v}]" CHANGELOG.md
+      - name: Run release gates
+        run: |
+          make fmt
+          make vet
+          make staticcheck
+          make vuln
+          go test -race ./...
+
+  build:
+    needs: verify
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            goos: linux
+            arch: amd64
+            goarch: amd64
+          - os: linux
+            goos: linux
+            arch: arm64
+            goarch: arm64
+          - os: darwin
+            goos: darwin
+            arch: amd64
+            goarch: amd64
+          - os: darwin
+            goos: darwin
+            arch: arm64
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Build deterministic archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          archive="pxp_${version}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz"
+          source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          mkdir -p dist/package
+          flags="-s -w -X github.com/otar/pxp/internal/version.Version=${version} -X github.com/otar/pxp/internal/version.Commit=${GITHUB_SHA}"
+          go build -trimpath -ldflags "$flags" -o dist/package/pxp ./cmd/pxp
+          go build -trimpath -ldflags "$flags" -o dist/package/pxp-convert ./cmd/pxp-convert
+          cp LICENSE README.md dist/package/
+          tar --sort=name --mtime="@${source_date_epoch}" --owner=0 --group=0 --numeric-owner \
+            -C dist/package -czf "dist/${archive}" LICENSE README.md pxp pxp-convert
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist/package
+          format: spdx-json
+          output-file: dist/pxp_${{ github.ref_name }}_${{ matrix.os }}_${{ matrix.arch }}.spdx.json
+          syft-version: v1.50.0
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+          - runner: macos-15-intel
+            os: darwin
+            arch: amd64
+          - runner: macos-15
+            os: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist
+      - name: Run packaged binaries
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          tar -xzf "dist/pxp_${version}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" -C dist
+          "$(pwd)/dist/pxp" version | grep -F "pxp ${version} (${GITHUB_SHA})"
+          "$(pwd)/dist/pxp-convert" --help
+
+  publish:
+    needs: smoke
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cp install.sh dist/install.sh
+          cp schema/pxp-v1.schema.json dist/pxp-v1.schema.json
+          cd dist
+          sha256sum -- *.tar.gz *.spdx.json install.sh pxp-v1.schema.json > SHA256SUMS
+      - name: Attest release assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.spdx.json
+            dist/install.sh
+            dist/pxp-v1.schema.json
+            dist/SHA256SUMS
+      - name: Upload draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --draft \
+            --title "PXP $TAG" \
+            --generate-notes
+      - name: Publish completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --draft=false

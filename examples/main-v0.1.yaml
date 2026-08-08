@@ -1,0 +1,4 @@
+name: Legacy main plan
+steps:
+  - name: Verify the repository
+    run: git status --short

@@ -1,229 +1,89 @@
-
-> [!CAUTION]
-> This project is currently in an **experimental** stage and under active development. APIs, features, and functionality may change without notice.  Please report any issues you encounter.
-
-<img src="logo.png" width="400">
-
 # PXP — Plan eXecution Protocol
 
-**Your agent already figured it out. Stop feeding tokens to `cat`-ing and `ls`-ing.**
+PXP turns a reviewed YAML plan into a deterministic sequence of shell commands and Git patches. Planning stays with the coding agent; execution is performed by a small, auditable CLI with no model calls, telemetry, or automatic network access.
 
----
+> [!WARNING]
+> A PXP plan can run arbitrary shell commands with your user permissions. Read every plan and use PXP only with plans you trust. PXP is an executor, not a sandbox.
 
-## Why
+## Requirements
 
-By the time your AI agent has analyzed the codebase, asked clarifying questions, and planned the changes, it already knows what needs to happen. Which files, which lines, which commands.
+- macOS 12 or later, Linux with kernel 3.2 or later, or Linux under WSL
+- Git 2.24 or later
+- Bash 3.2 or later
 
-So why does it then spend 50,000 more tokens executing those changes one tool call at a time? It re-reads files it already understood. It feeds each result back into context. You watch a spinner and your rate limit evaporates.
+Native Windows shells are not supported in v1.
 
+## Install
+
+Download and inspect the installer published with a GitHub Release:
+
+```sh
+curl -fsSLO https://github.com/otar/pxp/releases/latest/download/install.sh
+less install.sh
+bash install.sh
 ```
-Analyze codebase ──→ Plan changes ──→ Execute plan
-    (needs LLM)        (needs LLM)      (doesn't need LLM)
+
+The installer selects the current OS and architecture, verifies `SHA256SUMS`, and atomically installs `pxp` into `~/.local/bin` by default. See [installation](docs/installation.md) for pinned versions, custom destinations, upgrades, and removal.
+
+To build from source with Go 1.25 or later:
+
+```sh
+make build
+./bin/pxp version
 ```
 
-The reasoning *is* the hard part. Execution is mechanical. PXP makes that split explicit: the LLM outputs a changeset, a dumb bash script applies it. Zero tokens on execution. Zero waiting.
+## Quick start
 
-## What it looks like
+Create `plan.pxp.yaml`:
 
 ```yaml
-name: Add rate limiting to API routes
-
+pxp_version: "1.0"
+name: Add a greeting
 steps:
-  - name: Install dependencies
-    run: npm install express-rate-limit
-
-  - name: Add rate limiter middleware
+  - name: Add the file
     patch: |
-      --- a/src/middleware/index.js
-      +++ b/src/middleware/index.js
-      @@ -1,4 +1,6 @@
-      +import rateLimit from 'express-rate-limit';
-      +
-       import { auth } from './auth.js';
-       import { cors } from './cors.js';
-
-      -export { auth, cors };
-      +export const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
-      +export { auth, cors };
-
-  - name: Apply to routes
-    patch: |
-      --- a/src/routes/api.js
-      +++ b/src/routes/api.js
-      @@ -1,5 +1,7 @@
-       import express from 'express';
-      -import { auth } from '../middleware/index.js';
-      +import { auth, limiter } from '../middleware/index.js';
-
-       const router = express.Router();
-      +router.use(limiter);
-
-  - name: Verify
-    run: npm test
+      diff --git a/hello.txt b/hello.txt
+      new file mode 100644
+      --- /dev/null
+      +++ b/hello.txt
+      @@ -0,0 +1 @@
+      +hello from PXP
+  - name: Verify it
+    run:
+      - test "$(cat hello.txt)" = "hello from PXP"
 ```
 
-YAML steps. Standard unified diffs. Shell commands. Nothing you don't already know.
+Review it, then run:
 
-## Run it
-
-```bash
-./pxp.sh changeset.yml
+```sh
+pxp run plan.pxp.yaml
 ```
 
-```
-▶ Changeset: Add rate limiting to API routes
+PXP validates the entire document before any mutation, locates the enclosing Git worktree, obtains a worktree lock, and refuses tracked changes unless `--allow-dirty` is explicit. Untracked and ignored files are allowed, so an untracked plan can be executed. Commands run sequentially in fresh non-interactive Bash processes. Patches are checked with Git before they are applied.
 
-[1] run: Install dependencies
-  ✓ Done
-[2] patch: Add rate limiter middleware
-  ✓ Done
-[3] patch: Apply to routes
-  ✓ Done
-[4] run: Verify
-  ✓ Done
+## CLI
 
-✓ All 4 steps completed.
+```text
+pxp run [--allow-dirty] <plan.pxp.yaml|->
+pxp help [run|version]
+pxp version
+pxp -h
+pxp --help
+pxp --version
 ```
 
-Instant. No LLM in the loop. Fails fast: if step 2 breaks, step 3 never runs. Patches are validated with `git apply --check` before touching your files.
+Use `-` to read a plan from standard input. File inputs must be non-symlink regular files. Child commands never receive the plan stream as interactive input. Lifecycle messages go to standard error; command output is streamed unchanged. PXP reports command ordinals but never echoes command contents.
 
-## Where your tokens actually go
+Exit codes are stable: `0` success, `2` usage, `3` input/schema error, `4` precondition error, `5` execution failure, `70` internal error, and `130`/`143` for interrupted processes.
 
-Here's a typical Claude Code session that edits 5 files:
+## Protocol and migration
 
-```
-[LLM call]  Read file A                           →  3,200 tokens
-[LLM call]  Read file B                           →  4,100 tokens
-[LLM call]  Read file C                           →  2,800 tokens
-[LLM call]  Plan changes                          →  1,500 tokens
-[LLM call]  Edit file A, read result              →  6,400 tokens  ← unnecessary
-[LLM call]  Edit file B, read result              →  7,200 tokens  ← unnecessary
-[LLM call]  Edit file C, read result              →  5,800 tokens  ← unnecessary
-[LLM call]  Run npm install, read output          →  3,100 tokens  ← unnecessary
-[LLM call]  Run tests, read output                →  4,500 tokens  ← unnecessary
-```
+The normative v1 behavior is in [SPEC.md](SPEC.md), with a machine-readable companion at [schema/pxp-v1.schema.json](schema/pxp-v1.schema.json). Older `main-v0.1` and `develop-v0.1` documents are intentionally rejected by `pxp`; convert them with the separately shipped `pxp-convert` tool described in [MIGRATION.md](MIGRATION.md).
 
-The LLM understood everything it needed by step 4. Steps 5 through 9 are the model narrating its own typing. Each call carries the full conversation history. The context window fills with tool results the model already anticipated.
+PXP does not roll back shell commands or patches after a later step fails. Commit or stash important work first and follow [recovery guidance](docs/recovery.md) if execution stops partway through.
 
-With PXP:
+## Project policy
 
-```
-[LLM call]  Read, analyze, plan                   → 11,600 tokens
-[LLM call]  Generate changeset.yml                →  1,500 tokens
-[executor]  Apply all changes                     →      0 tokens
-```
+Security reports follow [SECURITY.md](SECURITY.md). Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md). Releases and reproducibility are documented in [RELEASING.md](RELEASING.md).
 
-Same result. Fraction of the cost.
-
-## Why this is better
-
-The LLM already did the thinking. Applying a patch doesn't require intelligence, and `git apply` does it for free.
-
-Your context window stays clean, too. Every tool call result goes back into context. A single `cat src/big-file.ts` eats 2,000 tokens that the model carries for the rest of the session. With PXP, the window stays focused on reasoning instead of echoing file contents the model already read.
-
-Same changeset, same result. Always. The agent doesn't take a different path each time, and you don't end up with partial edits from a model that got confused halfway through.
-
-You also get to review before anything happens. The changeset *is* the review artifact. You read the diffs, you see the full sequence, you run it or you don't. Nothing touches your code until you say so.
-
-And the patches are just patches. Standard unified diffs, the same format `git diff` produces. If you can read a pull request, you can read a changeset.
-
-## Setup
-
-### 1. Get the executor
-
-```bash
-curl -o pxp.sh https://raw.githubusercontent.com/otar/pxp/main/pxp.sh
-chmod +x pxp.sh
-```
-
-Single bash script. No dependencies beyond `git` and `bash 3.2+`. Works on Linux, macOS, and Windows (Git Bash).
-
-### 2. Tell your AI to use it
-
-Add this to your `CLAUDE.md`, `AGENTS.md`, or system prompt:
-
-```markdown
-When implementing changes or presenting a finalized plan for implementation, do not edit files directly. Instead, generate a single `changeset.yml` changeset file using the PXP format.
-
-Format:
-  name: Changeset short description
-  steps:
-    - name: Step short description
-      run: shell commands for dependencies, tooling, verification
-    - name: Step short description
-      patch: | unified diffs for code changes
-
-Rules:
-- Steps execute sequentially: `run` for shell commands, `patch` for unified diffs
-- Patches use standard unified diff format, paths relative to project root
-- Minimum 3 context lines per hunk
-- Multiple files can be included in a single patch step
-- The changeset is applied with: ./pxp.sh changeset.yml
-- Avoid blank context lines: anchor hunks on non-blank lines only. Represent blank lines in the diff as explicit `+` additions, never as context.
-```
-
-### 3. Work normally, execute instantly
-
-```
-You:    "Refactor the auth module to use JWT"
-AI:     *analyzes codebase, asks questions, iterates on the plan*
-AI:     *generates changeset.yml*
-You:    *reviews the changeset*
-You:    ./pxp.sh changeset.yml   ← instant, zero tokens
-```
-
-You still iterate. You still plan. The AI still does the hard work of understanding your code. It just stops burning tokens on the part that doesn't need a brain.
-
-## Format reference
-
-```yaml
-name: Short description          # optional
-
-steps:
-  - name: Step description       # optional
-    run: npm install express      # shell command
-
-  - name: Step description       # optional
-    patch: |                      # unified diff (one or more files)
-      --- a/src/file.js
-      +++ b/src/file.js
-      @@ -1,3 +1,4 @@
-      +import foo from 'foo';
-       const bar = 1;
-```
-
-Two step types. That's the whole spec. [Read the full specification →](SPEC.md)
-
-## FAQ
-
-**Does this work with Claude Code / Cursor / Copilot / Aider?**
-Yes. Any LLM that can output YAML and unified diffs can produce PXP changesets. You just add the instruction to your system prompt or project config.
-
-**What about changes that need runtime feedback?**
-Use PXP for the parts that don't. Most implementation work (installing deps, applying patches, running codegen, linting) is predictable. If the AI genuinely needs to react to command output mid-execution, that's still a ReAct loop.
-
-**What if a patch doesn't apply?**
-`git apply --check` runs before applying. If the code changed since the plan was generated, it fails immediately with a clear error. Nothing gets partially applied.
-
-**Why not just `git apply` directly?**
-Because your changeset isn't just patches. It's `npm install`, then patches, then `npx codegen`, then `npm test`, all sequenced in one reviewable file.
-
-**Is this like Terraform plan/apply?**
-Same philosophy, much smaller scope. PXP is specifically for AI-generated code changes. Two step types, standard diffs, plain YAML.
-
-## Project
-
-| File | Description |
-|---|---|
-| [`pxp.sh`](pxp.sh) | The executor (single bash script, no dependencies) |
-| [`SPEC.md`](SPEC.md) | Full format specification |
-| [`test_pxp.sh`](test_pxp.sh) | Test suite (17 tests, 59 assertions) |
-| [`example-changeset.yml`](example-changeset.yml) | Example changeset |
-| [`CLAUDE.md`](CLAUDE.md) | Drop-in instructions for Claude Code |
-| [`AGENTS.md`](AGENTS.md) | Drop-in instructions for AI Agents |
-
----
-
-Happy prompting! May your tokens be well-spent!
-
-[Otar](https://otar.me)
+MIT licensed. See [LICENSE](LICENSE).

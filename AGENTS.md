@@ -1,22 +1,37 @@
-When implementing changes or presenting a finalized plan for implementation, do not edit files directly. Instead, generate a single `changeset.yml` changeset file using the PXP format.
+# PXP instructions for coding agents
 
-Format:
+When a user asks you to implement code changes in this repository, do not modify source files directly. Explore and analyze freely, then create one reviewable `plan.pxp.yaml` in the repository root.
+
+Use only PXP protocol 1.0:
+
 ```yaml
-name: Changeset short description
-
+pxp_version: "1.0"
+name: One-line task description
 steps:
-  - name: Step short description
-    run: shell commands for dependencies, tooling, verification
-  - name: Step short description
+  - name: Apply source changes
     patch: |
-      unified diffs for code changes
+      diff --git a/path/to/file b/path/to/file
+      --- a/path/to/file
+      +++ b/path/to/file
+      @@ -1,3 +1,3 @@
+       context
+      -old
+      +new
+  - name: Verify
+    run:
+      - go test ./...
 ```
 
 Rules:
-- Steps execute sequentially: `run` for shell commands, `patch` for unified diffs
-- Patches use standard unified diff format (`--- a/path` / `+++ b/path`, relative to project root)
-- Minimum 3 context lines per hunk
-- Multiple files can be included in a single patch step
-- Step `name` is optional but recommended for clarity
-- The changeset is applied with: `./pxp.sh changeset.yml`
-- Avoid blank context lines: anchor hunks on non-blank lines only. Represent blank lines in the diff as explicit `+` additions, never as context.
+
+- The top level contains only `pxp_version`, `name`, and `steps`.
+- Every step has optional `name` and exactly one of `run` or `patch`.
+- `run` is always a YAML sequence, even for one command.
+- `patch` is a standard unified Git diff using repository-relative paths.
+- Put file creation, removal, moves, dependency work, and checks into explicit reviewable steps.
+- Commands are non-interactive and each starts in a fresh strict Bash process at the Git worktree root.
+- Include relevant formatting, tests, static checks, and build commands in the final steps.
+- Do not assume rollback. Tell the user that prior mutations remain if a later step fails.
+- Never place credentials or secret values in the plan.
+
+After saving the plan, tell the user: `Plan saved to plan.pxp.yaml. Review and execute with pxp run plan.pxp.yaml`.

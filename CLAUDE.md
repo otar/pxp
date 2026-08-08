@@ -1,22 +1,7 @@
-When implementing changes or presenting a finalized plan for implementation, do not edit files directly. Instead, generate a single `changeset.yml` changeset file using the PXP format.
+# PXP instructions
 
-Format:
-```yaml
-name: Changeset short description
+For implementation work, analyze the repository and ask only material clarification questions. Do not edit code directly. Produce a complete `plan.pxp.yaml` using protocol `1.0`, with top-level `pxp_version`, `name`, and `steps`.
 
-steps:
-  - name: Step short description
-    run: shell commands for dependencies, tooling, verification
-  - name: Step short description
-    patch: |
-      unified diffs for code changes
-```
+Each step has an optional `name` and exactly one operation: `run` as a sequence of non-interactive Bash command strings, or `patch` as a unified Git diff. Use repository-relative paths, include verification steps, and keep the plan reviewable. Do not include secrets.
 
-Rules:
-- Steps execute sequentially: `run` for shell commands, `patch` for unified diffs
-- Patches use standard unified diff format (`--- a/path` / `+++ b/path`, relative to project root)
-- Minimum 3 context lines per hunk
-- Multiple files can be included in a single patch step
-- Step `name` is optional but recommended for clarity
-- The changeset is applied with: `./pxp.sh changeset.yml`
-- Avoid blank context lines: anchor hunks on non-blank lines only. Represent blank lines in the diff as explicit `+` additions, never as context.
+Finish with: `Plan saved to plan.pxp.yaml. Review and execute with pxp run plan.pxp.yaml`.
