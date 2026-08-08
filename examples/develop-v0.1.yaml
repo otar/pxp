@@ -1,0 +1,8 @@
+pxp_version: "0.1"
+plan:
+  task: Legacy develop plan
+  steps:
+    - type: shell
+      name: Verify the repository
+      commands:
+        - git status --short

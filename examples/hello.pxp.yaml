@@ -1,0 +1,9 @@
+pxp_version: "1.0"
+name: Demonstrate PXP v1
+steps:
+  - name: Show the working tree root
+    run:
+      - git rev-parse --show-toplevel
+  - name: Run a harmless verification
+    run:
+      - printf '%s\n' 'PXP plan execution works'
