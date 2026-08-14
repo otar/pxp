@@ -1,45 +1,101 @@
-<p align="center">
-  <img src="logo.png" alt="PXP logo" width="520">
-</p>
+# PXP — Plan eXecution Protocol
 
-# PXP: Plan eXecution Protocol
+> **Think with the agent. Execute without it.**
 
-> Plan once. Review once. Run without waiting on the model.
+PXP is the handoff from AI reasoning to local execution.
 
-PXP is a local executor for coding-agent plans. Your agent writes one YAML file with all patches and commands. You review that file and approve its exact SHA-256. PXP then verifies the plan and the expected Git commit before it applies the steps.
+Use your coding agent to investigate the repository, challenge assumptions, and remove ambiguity. When the task is fully understood, have the agent encode the entire change—patches, commands, and checks—in one YAML plan. Review it, approve its exact SHA-256, and let PXP run it.
 
-After approval, one local command starts the work. PXP does not pause between steps to ask a model what to do next. It makes no model calls during execution.
+No model calls between steps. No waiting for the agent to rediscover what it already decided. No tokens spent narrating a plan that is already complete.
 
-This can shorten the time between an approved plan and a completed change. It can also reduce token use. Actual savings depend on the task and whether a failed plan needs a new planning pass.
+**The model does the thinking. PXP does the doing.**
 
-[Get started](#quick-start) or [read how PXP works](#how-it-works).
+[Get started](#quick-start) or [see exactly where PXP fits](#where-pxp-fits).
 
-## Why use PXP?
+## Where PXP fits
 
-A coding agent often plans and changes a workspace in the same session. It can send each result back to the model, wait for a reply, and then select the next action. This loop is useful while the agent explores a problem. It adds delay and token use when the plan is already complete.
+Many coding agents work in a loop: think, act, observe, ask the model what to do next. That loop is valuable while the solution is still being discovered. Once every material decision has been made, the same loop becomes latency and token overhead.
 
-PXP separates planning from execution. The model can reason while it creates the plan. After you approve that plan, a local process follows the fixed steps.
+PXP replaces that execution loop with a finite, reviewable path:
 
-### Start as soon as you approve
+```mermaid
+flowchart TB
+    subgraph agent["Typical agent execution"]
+        direction LR
+        AT["Think"] --> AA["Act"] --> AO["Observe"]
+        AO -->|"another model call"| AT
+    end
 
-Run one command after you review the plan. PXP checks its preconditions and starts the work. It does not wait for model replies between commands or patches.
+    subgraph pxp["PXP execution"]
+        direction LR
+        PC["Clarify with the agent"] --> PP["Complete plan"] --> PR["Review + approve hash"] --> PE["Execute locally"]
+    end
+```
 
-The commands can still take time. PXP does not claim that every plan finishes instantly.
+| | Iterative agent execution | PXP |
+|---|---|---|
+| Model role | Reasons throughout the run | Reasons before the run |
+| Execution | Repeated think → act → observe cycles | One approved plan, applied in order |
+| Adaptation | Can change course after every result | Stops on failure; never improvises |
+| Best fit | Exploration and unresolved work | Well-defined, fully planned work |
 
-### Use fewer model tokens
+PXP is not a replacement for agentic exploration. It is what comes after exploration has done its job.
 
-PXP does not call a model while it executes a plan. This can use fewer tokens than an agent that plans, executes, inspects each result, and calls the model again.
+## Start at the top of the hill
 
-If a plan fails, PXP stops. You can then inspect the workspace and create a new plan. A new planning pass uses more time and tokens, so the actual savings vary.
+Software development happens in the decisions before the keystrokes. AI did not change that. If the goal, constraints, or failure behavior are unclear, execution is premature—whether the code is written by a person or a model.
 
-### Approve the complete change
+[Basecamp's Hill Charts](https://basecamp.com/hill-charts) give this a useful shape:
 
-A PXP plan contains the patches and shell commands that will run. You can inspect the whole change before the first step starts.
+```text
+                    COMPLETE PLAN
+                         ▲
+                        / \
+     unknowns          /   \          known work
+     clarify          /     \         execute
+     with AI         /       \        with PXP
+                    /         \
+             UNKNOWN → KNOWN → DONE
+```
 
-PXP can bind approval to two exact values:
+Uphill work is about finding the approach and resolving unknowns. At the summit, there are no unsolved problems left: you can see the path down. Downhill work is execution.
 
-- the SHA-256 of the plan file;
-- the Git commit used during planning.
+**PXP starts at the summit.**
+
+Use PXP when:
+
+- the outcome and acceptance criteria are explicit;
+- the agent has inspected the repository and resolved material questions;
+- every intended patch, command, and verification can be written down;
+- you want to approve the whole change before any of it runs.
+
+Keep the agent in the loop when:
+
+- the request is an open-ended question or investigation;
+- product, design, or architecture choices are still unsettled;
+- the next step depends on learning from the previous one;
+- you expect the implementation to improvise.
+
+If the work is still uphill, clarify it. If the path is visible, encode it once and run it.
+
+## Why PXP feels fast
+
+### Execution starts when you approve
+
+One command verifies the plan and begins the work. PXP does not pause between patches and commands for model replies. The commands themselves still take as long as they take; the agent latency is what disappears.
+
+### Tokens go to decisions, not ceremony
+
+PXP makes no model calls during execution. You spend model tokens while reasoning improves the plan, not while a model repeatedly observes and confirms work that was already specified.
+
+If a plan fails, PXP stops. Inspect the workspace, resolve the new uncertainty, and produce a new complete plan. PXP never hides adaptation inside execution.
+
+### You approve the complete change
+
+A PXP plan contains every patch and shell command that will run. Before the first step starts, PXP can bind your approval to:
+
+- the SHA-256 of the exact plan file;
+- the exact Git commit used during planning.
 
 If either value changes, PXP stops before it runs a plan step.
 
@@ -49,12 +105,12 @@ If either value changes, PXP stops before it runs a plan step.
 CODING AGENT                 YOU                         PXP
 
 inspect the repository       review the complete plan    verify the plan hash
-write plan.pxp.yaml    ->    inspect every step     ->   verify the Git commit
-stop planning                approve one SHA-256          apply steps in order
-                                                          make no model calls
+resolve ambiguity      →     inspect every step     →    verify the Git commit
+write plan.pxp.yaml          approve one SHA-256          apply steps in order
+stop planning                                             make no model calls
 ```
 
-The agent is present during planning. It is not present during execution. PXP does not adapt the plan after it starts.
+The agent is present during planning. It is not present during execution. PXP applies the approved steps in order and stops at the first failure; it does not adapt the plan after execution starts.
 
 ## Quick start
 
