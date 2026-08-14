@@ -83,9 +83,10 @@ jobs:
           flags="-s -w -X github.com/otar/pxp/internal/version.Version=${version} -X github.com/otar/pxp/internal/version.Commit=${GITHUB_SHA}"
           go build -trimpath -ldflags "$flags" -o dist/package/pxp ./cmd/pxp
           go build -trimpath -ldflags "$flags" -o dist/package/pxp-convert ./cmd/pxp-convert
+          go build -trimpath -ldflags "$flags" -o dist/package/pxp-bench ./cmd/pxp-bench
           cp LICENSE README.md dist/package/
           tar --sort=name --mtime="@${source_date_epoch}" --owner=0 --group=0 --numeric-owner \
-            -C dist/package -czf "dist/${archive}" LICENSE README.md pxp pxp-convert
+            -C dist/package -czf "dist/${archive}" LICENSE README.md pxp pxp-bench pxp-convert
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
@@ -136,6 +137,7 @@ jobs:
           tar -xzf "dist/pxp_${version}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" -C dist
           "$(pwd)/dist/pxp" version | grep -F "pxp ${version} (${GITHUB_SHA})"
           "$(pwd)/dist/pxp-convert" --help
+          "$(pwd)/dist/pxp-bench" --help
 
   publish:
     needs: smoke
@@ -157,8 +159,9 @@ jobs:
         run: |
           cp install.sh dist/install.sh
           cp schema/pxp-v1.schema.json dist/pxp-v1.schema.json
+          cp schema/pxp-v1.1.schema.json dist/pxp-v1.1.schema.json
           cd dist
-          sha256sum -- *.tar.gz *.spdx.json install.sh pxp-v1.schema.json > SHA256SUMS
+          sha256sum -- *.tar.gz *.spdx.json install.sh pxp-v1.schema.json pxp-v1.1.schema.json > SHA256SUMS
       - name: Attest release assets
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -167,6 +170,7 @@ jobs:
             dist/*.spdx.json
             dist/install.sh
             dist/pxp-v1.schema.json
+            dist/pxp-v1.1.schema.json
             dist/SHA256SUMS
       - name: Upload draft release
         env:

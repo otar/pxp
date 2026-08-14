@@ -72,6 +72,22 @@ func (r *Repository) CheckClean(ctx context.Context) error {
 	return nil
 }
 
+// CheckHead verifies that HEAD is the exact commit declared by a bound plan.
+func (r *Repository) CheckHead(ctx context.Context, expected string) error {
+	out, err := r.git(ctx, nil, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return fmt.Errorf("resolve Git HEAD: %w", err)
+	}
+	actual := strings.TrimSpace(string(out))
+	if actual == "" {
+		return fmt.Errorf("resolve Git HEAD: Git returned an empty object ID")
+	}
+	if actual != expected {
+		return fmt.Errorf("git HEAD mismatch: plan expects %s, repository is at %s", expected, actual)
+	}
+	return nil
+}
+
 // CheckPatch asks Git whether diff applies to the current worktree.
 func (r *Repository) CheckPatch(ctx context.Context, diff string) error {
 	if err := r.CheckPatchPolicy(ctx, diff); err != nil {

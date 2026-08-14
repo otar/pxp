@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/otar/pxp/main/schema/pxp-v1.1.schema.json",
+  "title": "PXP 1.1 plan",
+  "description": "Structural companion to SPEC.md. Executor byte limits and the restricted YAML and patch profiles are normative and cannot be fully expressed in JSON Schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pxp_version", "name", "repository", "steps"],
+  "properties": {
+    "pxp_version": { "const": "1.1" },
+    "name": { "type": "string", "pattern": "\\S", "maxLength": 1024 },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "head"],
+      "properties": {
+        "type": { "const": "git" },
+        "head": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "\\S", "maxLength": 1024 },
+        "run": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "type": "string", "pattern": "\\S", "maxLength": 65536 }
+        },
+        "patch": { "type": "string", "pattern": "\\S" }
+      },
+      "oneOf": [
+        { "required": ["run"], "not": { "required": ["patch"] } },
+        { "required": ["patch"], "not": { "required": ["run"] } }
+      ]
+    }
+  }
+}

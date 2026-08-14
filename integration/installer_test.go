@@ -84,7 +84,7 @@ func TestInstallerRejectsUnexpectedArchiveWithoutReplacing(t *testing.T) {
 	destination := filepath.Join(fixture.binDir, "pxp")
 	writeFile(t, destination, "existing destination\n")
 	writeFile(t, filepath.Join(fixture.archiveSource, "unexpected"), "surprise\n")
-	fixture.rebuildArchive(t, "LICENSE", "README.md", "pxp", "pxp-convert", "unexpected")
+	fixture.rebuildArchive(t, "LICENSE", "README.md", "pxp", "pxp-bench", "pxp-convert", "unexpected")
 	fixture.writeChecksum(t)
 
 	result := fixture.run(t, "--version", "v1.0.0", "--bin-dir", fixture.binDir, "--force")
@@ -94,6 +94,18 @@ func TestInstallerRejectsUnexpectedArchiveWithoutReplacing(t *testing.T) {
 	if got := readFile(t, destination); got != "existing destination\n" {
 		t.Fatalf("destination changed after archive rejection: %q", got)
 	}
+}
+
+func TestInstallerAcceptsLegacyArchiveWithoutBenchmarkBinary(t *testing.T) {
+	fixture := newInstallerFixture(t)
+	fixture.rebuildArchive(t, "LICENSE", "README.md", "pxp", "pxp-convert")
+	fixture.writeChecksum(t)
+
+	result := fixture.run(t, "--version", "v1.0.0", "--bin-dir", fixture.binDir)
+	if result.code != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", result.code, result.stdout, result.stderr)
+	}
+	assertExists(t, filepath.Join(fixture.binDir, "pxp"))
 }
 
 type installerFixture struct {
@@ -117,10 +129,11 @@ func newInstallerFixture(t *testing.T) *installerFixture {
 		}
 	}
 	writeExecutable(t, filepath.Join(fixture.archiveSource, "pxp"), "#!/usr/bin/env bash\nif [[ \"${1:-}\" == version ]]; then printf 'pxp 1.0.0 (test)\\n'; else exit 2; fi\n")
+	writeExecutable(t, filepath.Join(fixture.archiveSource, "pxp-bench"), "#!/usr/bin/env bash\nexit 0\n")
 	writeExecutable(t, filepath.Join(fixture.archiveSource, "pxp-convert"), "#!/usr/bin/env bash\nexit 0\n")
 	writeFile(t, filepath.Join(fixture.archiveSource, "LICENSE"), "test license\n")
 	writeFile(t, filepath.Join(fixture.archiveSource, "README.md"), "test readme\n")
-	fixture.rebuildArchive(t, "LICENSE", "README.md", "pxp", "pxp-convert")
+	fixture.rebuildArchive(t, "LICENSE", "README.md", "pxp", "pxp-bench", "pxp-convert")
 	fixture.writeChecksum(t)
 
 	fakeCurl := `#!/usr/bin/env bash

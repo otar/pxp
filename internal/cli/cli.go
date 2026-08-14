@@ -20,7 +20,7 @@ import (
 const rootHelp = `pxp - execute reviewed PXP plans
 
 Usage:
-  pxp run [--allow-dirty] <plan.pxp.yaml|->
+  pxp run [--allow-dirty] [--expect-sha256 HASH] <plan.pxp.yaml|->
   pxp help [run|version]
   pxp version
 
@@ -31,15 +31,16 @@ Commands:
 `
 
 const runHelp = `Usage:
-  pxp run [--allow-dirty] <plan.pxp.yaml|->
+  pxp run [--allow-dirty] [--expect-sha256 HASH] <plan.pxp.yaml|->
 
 Arguments:
   plan.pxp.yaml  Plan file, resolved from the invocation directory
   -              Read the plan from standard input
 
 Options:
-  --allow-dirty  Allow pre-existing tracked changes; locking and safety checks remain enabled
-  -h, --help     Show this help
+  --allow-dirty          Allow pre-existing tracked changes; locking and safety checks remain enabled
+  --expect-sha256 HASH   Require the exact lowercase SHA-256 of the plan input
+  -h, --help             Show this help
 `
 
 const versionHelp = `Usage:
@@ -110,12 +111,12 @@ func help(args []string, stdout io.Writer, printer *output.Printer) int {
 }
 
 func runPlan(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, cwd string, printer *output.Printer) int {
-	allowDirty, input, showHelp, err := parseRunArgs(args)
+	options, err := parseRunArgs(args)
 	if err != nil {
 		printer.Error("usage", err.Error())
 		return ExitUsage
 	}
-	if showHelp {
+	if options.showHelp {
 		fmt.Fprint(stdout, runHelp)
 		return ExitOK
 	}
@@ -124,7 +125,7 @@ func runPlan(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return code
 	}
 
-	document, err := readPlanContext(ctx, input, cwd, stdin)
+	document, err := readPlanContext(ctx, options.input, cwd, stdin)
 	if err != nil {
 		if code := interrupted(ctx); code != ExitOK {
 			printer.Error("interrupted", "execution canceled")
@@ -132,6 +133,10 @@ func runPlan(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		}
 		printer.Error("plan", err.Error())
 		return ExitPlan
+	}
+	if options.expectedSHA256 != "" && document.SHA256 != options.expectedSHA256 {
+		printer.Error("precondition", fmt.Sprintf("plan SHA-256 mismatch: expected %s, got %s", options.expectedSHA256, document.SHA256))
+		return ExitPrecondition
 	}
 
 	repo, err := repository.Open(ctx, cwd)
@@ -155,7 +160,21 @@ func runPlan(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return ExitPrecondition
 	}
 
-	if !allowDirty {
+	if document.Repository != nil {
+		if err := repo.CheckHead(ctx, document.Repository.Head); err != nil {
+			releaseErr := lock.Release()
+			if code := interrupted(ctx); code != ExitOK {
+				printer.Error("interrupted", "execution canceled")
+				return code
+			}
+			printer.Error("precondition", err.Error())
+			if releaseErr != nil {
+				printer.Error("internal", releaseErr.Error())
+			}
+			return ExitPrecondition
+		}
+	}
+	if !options.allowDirty {
 		if err := repo.CheckClean(ctx); err != nil {
 			releaseErr := lock.Release()
 			if code := interrupted(ctx); code != ExitOK {
@@ -213,45 +232,83 @@ func runPlan(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	return ExitOK
 }
 
-func parseRunArgs(args []string) (allowDirty bool, input string, showHelp bool, err error) {
+type runOptions struct {
+	allowDirty     bool
+	expectedSHA256 string
+	input          string
+	showHelp       bool
+}
+
+func parseRunArgs(args []string) (runOptions, error) {
+	var options runOptions
 	endFlags := false
 	seenAllowDirty := false
-	for _, arg := range args {
+	seenExpectedSHA256 := false
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
 		if !endFlags {
 			switch arg {
 			case "--":
 				endFlags = true
 				continue
 			case "-h", "--help":
-				showHelp = true
+				options.showHelp = true
 				continue
 			case "--allow-dirty":
 				if seenAllowDirty {
-					return false, "", false, fmt.Errorf("--allow-dirty may be specified only once")
+					return runOptions{}, fmt.Errorf("--allow-dirty may be specified only once")
 				}
 				seenAllowDirty = true
-				allowDirty = true
+				options.allowDirty = true
+				continue
+			case "--expect-sha256":
+				if seenExpectedSHA256 {
+					return runOptions{}, fmt.Errorf("--expect-sha256 may be specified only once")
+				}
+				if index+1 >= len(args) {
+					return runOptions{}, fmt.Errorf("--expect-sha256 requires a hash")
+				}
+				seenExpectedSHA256 = true
+				index++
+				options.expectedSHA256 = args[index]
+				if !validSHA256(options.expectedSHA256) {
+					return runOptions{}, fmt.Errorf("--expect-sha256 must be 64 lowercase hexadecimal characters")
+				}
 				continue
 			}
 			if strings.HasPrefix(arg, "-") && arg != "-" {
-				return false, "", false, fmt.Errorf("unknown run option %q", arg)
+				return runOptions{}, fmt.Errorf("unknown run option %q", arg)
 			}
 		}
-		if input != "" {
-			return false, "", false, fmt.Errorf("run accepts exactly one plan input")
+		if options.input != "" {
+			return runOptions{}, fmt.Errorf("run accepts exactly one plan input")
 		}
-		input = arg
+		options.input = arg
 	}
-	if showHelp {
-		if input != "" || allowDirty {
-			return false, "", false, fmt.Errorf("--help cannot be combined with a plan or --allow-dirty")
+	if options.showHelp {
+		if options.input != "" || options.allowDirty || options.expectedSHA256 != "" {
+			return runOptions{}, fmt.Errorf("--help cannot be combined with a plan or run options")
 		}
-		return false, "", true, nil
+		return runOptions{showHelp: true}, nil
 	}
-	if input == "" {
-		return false, "", false, fmt.Errorf("missing plan input")
+	if options.input == "" {
+		return runOptions{}, fmt.Errorf("missing plan input")
 	}
-	return allowDirty, input, false, nil
+	return options, nil
+}
+
+func validSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			if character < 'a' || character > 'f' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type planReadResult struct {

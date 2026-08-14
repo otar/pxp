@@ -4,6 +4,11 @@ All notable changes are recorded here. This project follows Semantic Versioning 
 
 ## [Unreleased]
 
+- Add PXP 1.1 plans with required exact Git HEAD binding while retaining unbound PXP 1.0 compatibility.
+- Add `pxp run --expect-sha256` as an exact-byte approval precondition checked before repository access or execution.
+- Add instruction-only Claude Code and Codex skills that stop after producing a closed, hashable plan.
+- Add `pxp-bench`, representative offline fixtures, raw metric artifacts, and honest unavailable-metric reporting for direct-agent versus PXP comparisons.
+
 ## [1.0.0] - 2026-08-08
 
 - Define the strict PXP 1.0 protocol and stable CLI/exit-code contract.

@@ -15,6 +15,7 @@ build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath -ldflags '$(LDFLAGS)' -o bin/pxp ./cmd/pxp
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath -ldflags '$(LDFLAGS)' -o bin/pxp-convert ./cmd/pxp-convert
+	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath -ldflags '$(LDFLAGS)' -o bin/pxp-bench ./cmd/pxp-bench
 
 test:
 	$(GO) test $(GOFLAGS) ./...

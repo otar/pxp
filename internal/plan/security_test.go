@@ -64,7 +64,8 @@ func TestDecodeRejectsAmbiguousOrComplexYAML(t *testing.T) {
 		"blank command":                "pxp_version: \"1.0\"\nname: x\nsteps: [{run: ['   ']}]\n",
 		"blank plan name":              "pxp_version: \"1.0\"\nname: '   '\nsteps: [{run: [echo]}]\n",
 		"blank optional step name":     "pxp_version: \"1.0\"\nname: x\nsteps: [{name: '   ', run: [echo]}]\n",
-		"unsupported protocol version": "pxp_version: \"1.1\"\nname: x\nsteps: [{run: [echo]}]\n",
+		"missing 1.1 repository":       "pxp_version: \"1.1\"\nname: x\nsteps: [{run: [echo]}]\n",
+		"unsupported protocol version": "pxp_version: \"2.0\"\nname: x\nsteps: [{run: [echo]}]\n",
 	}
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {

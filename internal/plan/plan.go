@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path"
@@ -10,19 +11,29 @@ import (
 )
 
 const (
-	ProtocolVersion = "1.0"
-	MaxNameBytes    = 1024
-	MaxSteps        = 1000
-	MaxRunCommands  = 100
-	MaxCommandBytes = 64 << 10
+	ProtocolVersionV1_0 = "1.0"
+	ProtocolVersionV1_1 = "1.1"
+	ProtocolVersion     = ProtocolVersionV1_1
+	MaxNameBytes        = 1024
+	MaxSteps            = 1000
+	MaxRunCommands      = 100
+	MaxCommandBytes     = 64 << 10
 )
 
 // Plan is the validated PXP v1 execution document.
 type Plan struct {
-	PXPVersion string `yaml:"pxp_version"`
-	Name       string `yaml:"name"`
-	Steps      []Step `yaml:"steps"`
-	SHA256     string `yaml:"-"`
+	PXPVersion string           `yaml:"pxp_version"`
+	Name       string           `yaml:"name"`
+	Repository *RepositoryState `yaml:"repository,omitempty"`
+	Steps      []Step           `yaml:"steps"`
+	SHA256     string           `yaml:"-"`
+}
+
+// RepositoryState binds a PXP 1.1 plan to the exact Git commit it was
+// generated against. PXP 1.0 plans are intentionally unbound.
+type RepositoryState struct {
+	Type string `yaml:"type"`
+	Head string `yaml:"head"`
 }
 
 // Step contains exactly one executable operation. A nil Run is distinct from
@@ -34,11 +45,23 @@ type Step struct {
 }
 
 func (p *Plan) validate() error {
-	if p.PXPVersion != ProtocolVersion {
-		if p.PXPVersion == "" {
-			return fmt.Errorf("pxp_version is required and must equal %q", ProtocolVersion)
+	switch p.PXPVersion {
+	case ProtocolVersionV1_0:
+		if p.Repository != nil {
+			return fmt.Errorf("repository is not allowed in pxp_version %q", ProtocolVersionV1_0)
 		}
-		return fmt.Errorf("unsupported pxp_version %q (expected %q)", p.PXPVersion, ProtocolVersion)
+	case ProtocolVersionV1_1:
+		if p.Repository == nil {
+			return fmt.Errorf("repository is required for pxp_version %q", ProtocolVersionV1_1)
+		}
+		if err := p.Repository.validate(); err != nil {
+			return fmt.Errorf("repository: %w", err)
+		}
+	default:
+		if p.PXPVersion == "" {
+			return fmt.Errorf("pxp_version is required and must equal %q or %q", ProtocolVersionV1_0, ProtocolVersionV1_1)
+		}
+		return fmt.Errorf("unsupported pxp_version %q (supported: %q, %q)", p.PXPVersion, ProtocolVersionV1_0, ProtocolVersionV1_1)
 	}
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("name is required and must not be empty")
@@ -57,6 +80,22 @@ func (p *Plan) validate() error {
 		if err := p.Steps[i].validate(); err != nil {
 			return fmt.Errorf("steps[%d]: %w", i+1, err)
 		}
+	}
+	return nil
+}
+
+func (r *RepositoryState) validate() error {
+	if r.Type != "git" {
+		if r.Type == "" {
+			return fmt.Errorf("type is required and must equal %q", "git")
+		}
+		return fmt.Errorf("unsupported type %q (expected %q)", r.Type, "git")
+	}
+	if len(r.Head) != 40 && len(r.Head) != 64 {
+		return fmt.Errorf("head must be a full lowercase Git object ID (40 or 64 hexadecimal characters)")
+	}
+	if _, err := hex.DecodeString(r.Head); err != nil || strings.ToLower(r.Head) != r.Head {
+		return fmt.Errorf("head must be a full lowercase Git object ID (40 or 64 hexadecimal characters)")
 	}
 	return nil
 }

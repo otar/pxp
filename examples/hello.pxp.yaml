@@ -1,5 +1,5 @@
 pxp_version: "1.0"
-name: Demonstrate PXP v1
+name: Demonstrate legacy unbound PXP 1.0 compatibility
 steps:
   - name: Show the working tree root
     run:

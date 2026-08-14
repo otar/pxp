@@ -123,11 +123,12 @@ mkdir -p "$tmp_dir/extract"
 tar -tzf "$tmp_dir/$archive" > "$tmp_dir/members"
 awk '
   $0 == "pxp" { pxp++; next }
+  $0 == "pxp-bench" { bench++; next }
   $0 == "pxp-convert" { convert++; next }
   $0 == "LICENSE" { license++; next }
   $0 == "README.md" { readme++; next }
   { bad = 1 }
-  END { exit bad || pxp != 1 || convert != 1 || license != 1 || readme != 1 }
+  END { exit bad || pxp != 1 || bench > 1 || convert != 1 || license != 1 || readme != 1 }
 ' "$tmp_dir/members" || die "release archive has missing or unexpected contents"
 tar -xzf "$tmp_dir/$archive" -C "$tmp_dir/extract" pxp
 [[ -f "$tmp_dir/extract/pxp" && ! -L "$tmp_dir/extract/pxp" ]] || die "release archive does not contain pxp"

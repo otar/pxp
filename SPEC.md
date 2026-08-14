@@ -1,19 +1,22 @@
-# PXP 1.0 specification
+# PXP specification
 
 Status: stable
-Protocol version: `1.0`
+Protocol versions: `1.0`, `1.1`
 
 ## 1. Purpose
 
-PXP is a reviewed-plan execution protocol for code workspaces. A planner creates one UTF-8 YAML document; a v1 executor validates it and then executes its steps in order. PXP does not define planning, sandboxing, package management, remote execution, rollback, or adaptive response to command output.
+PXP is a reviewed-plan execution protocol for code workspaces. A planner creates one UTF-8 YAML document; an executor validates it and then executes its steps in order. PXP 1.1 can bind that document to the exact Git HEAD used during planning, and the CLI can bind an invocation to the exact approved plan bytes. PXP does not define planning, sandboxing, package management, remote execution, rollback, or adaptive response to command output.
 
 Plans are trusted programs. A conforming executor MUST NOT imply that validation makes arbitrary shell commands safe.
 
 ## 2. Document model
 
 ```yaml
-pxp_version: "1.0"
+pxp_version: "1.1"
 name: Human-readable plan name
+repository:
+  type: git
+  head: 0123456789abcdef0123456789abcdef01234567
 steps:
   - name: Optional step name
     run:
@@ -29,7 +32,11 @@ steps:
       +new
 ```
 
-The top-level mapping MUST contain exactly `pxp_version`, `name`, and `steps`. `pxp_version` MUST be the string `1.0`. `name` MUST be a non-blank string of at most 1024 UTF-8 bytes. `steps` MUST contain 1 through 1000 step mappings.
+For PXP 1.1, the top-level mapping MUST contain exactly `pxp_version`, `name`, `repository`, and `steps`. `pxp_version` MUST be the string `1.1`. `repository` MUST contain exactly `type: git` and `head`. `head` MUST be a full lowercase Git object ID of 40 or 64 hexadecimal characters. The two lengths support repositories using Git's SHA-1 and SHA-256 object formats; abbreviated IDs are forbidden.
+
+For PXP 1.0, the top-level mapping continues to contain exactly `pxp_version`, `name`, and `steps`; `repository` is forbidden and the plan is unbound. A current executor MUST continue to accept valid 1.0 plans with those semantics.
+
+For both versions, `name` MUST be a non-blank string of at most 1024 UTF-8 bytes. `steps` MUST contain 1 through 1000 step mappings.
 
 A step MAY contain a non-blank `name` of at most 1024 UTF-8 bytes and MUST contain exactly one of:
 
@@ -54,10 +61,11 @@ Before the first step, the executor MUST:
 
 1. verify all runtime requirements;
 2. acquire an exclusive, non-blocking PXP lock in the worktree Git directory;
-3. reject tracked staged, unstaged, or unmerged changes unless `--allow-dirty` was supplied; and
-4. leave untracked and ignored files out of the cleanliness check.
+3. for PXP 1.1, resolve `HEAD^{commit}` and require its full object ID to equal `repository.head`;
+4. reject tracked staged, unstaged, or unmerged changes unless `--allow-dirty` was supplied; and
+5. leave untracked and ignored files out of the cleanliness check.
 
-The lock is held until execution ends. A contending executor exits with a precondition error. Worktrees use their own Git directories and therefore their own locks.
+The repository-state check occurs while the PXP lock is held and before patch-policy preflight or any plan step. A mismatch is a precondition error and MUST NOT execute a command or apply a patch. The lock coordinates PXP processes; it cannot prevent unrelated processes from changing the repository concurrently. Worktrees use their own Git directories and therefore their own locks. PXP does not create or isolate a worktree.
 
 ## 5. Run steps
 
@@ -87,7 +95,7 @@ On `SIGINT` or `SIGTERM`, the executor forwards the signal to the active command
 
 ## 8. Output and exit status
 
-Lifecycle output is human-readable and written to standard error. It includes the plan name, exact-input SHA-256 hash, numbered step start/success/failure events, command ordinals, and final status. Command contents MUST NOT be echoed. During plan execution, the executor itself writes nothing to standard output; child process output is streamed to the corresponding stream and is not reformatted. Color MAY be used only when standard error is a terminal and MUST respect `NO_COLOR`.
+Lifecycle output is human-readable and written to standard error. It includes the plan name, exact-input SHA-256 hash, numbered step start/success/failure events, command ordinals, and final status. The hash is over every original input byte, including a UTF-8 byte-order mark or trailing newline. Command contents MUST NOT be echoed. During plan execution, the executor itself writes nothing to standard output; child process output is streamed to the corresponding stream and is not reformatted. Color MAY be used only when standard error is a terminal and MUST respect `NO_COLOR`.
 
 Stable exit codes:
 
@@ -109,7 +117,7 @@ Diagnostics MUST identify the category and failing step without printing secrets
 The normative interface is:
 
 ```text
-pxp run [--allow-dirty] <plan.pxp.yaml|->
+pxp run [--allow-dirty] [--expect-sha256 HASH] <plan.pxp.yaml|->
 pxp help [run|version]
 pxp version
 pxp -h
@@ -117,14 +125,18 @@ pxp --help
 pxp --version
 ```
 
+`--expect-sha256 HASH` requires exactly 64 lowercase hexadecimal characters. After reading and validating the complete input, the executor MUST compare the exact-input hash with `HASH`. A mismatch is a precondition error. This comparison MUST occur before opening the repository, acquiring a lock, or executing any plan step. The parsed in-memory document derived from those hashed bytes is the only document executed, so later changes to a plan file cannot change the active execution.
+
 `-` reads at most 16 MiB from standard input before execution and is not forwarded to child commands. A file input MUST resolve to a non-symlink regular file. Unknown flags, commands, help topics, and extra operands are usage errors.
 
 ## 10. Security and networking
 
-Ordinary execution performs no update check, telemetry, DNS lookup, or other protocol-initiated network request. A plan command may use the network because it has the caller's permissions.
+Ordinary execution performs no update check, telemetry, DNS lookup, model call, or other protocol-initiated network request. A plan command may use the network because it has the caller's permissions.
+
+The plan hash guarantees that PXP executes the exact bytes identified by an independently supplied expected hash. Repository binding guarantees that a PXP 1.1 plan starts only when Git HEAD is the declared commit. Neither guarantee authenticates who produced or approved the hash, freezes non-HEAD state, prevents concurrent non-PXP mutation, makes shell commands safe, or makes external inputs deterministic.
 
 Reviewers SHOULD inspect the whole plan, especially shell commands, patch paths, generated files, and data sent to external programs. Users SHOULD commit or stash valuable work before running a plan, even when `--allow-dirty` is used.
 
 ## 11. Compatibility
 
-The protocol version is independent of the executor release version. Executors MUST reject unsupported protocol versions. Historical formats are not accepted by the v1 executor; an explicit, non-executing converter is provided separately. Future compatible clarifications retain `1.0`; incompatible document changes require another protocol version.
+The protocol version is independent of the executor release version. Executors MUST reject unsupported protocol versions. PXP 1.1 is a new version because repository binding adds required document data and execution semantics. Current executors support both 1.0 (unbound) and 1.1 (bound); the 1.0 schema remains unchanged. Historical pre-1.0 formats are not accepted by the executor; an explicit, non-executing converter is provided separately. Future compatible clarifications retain their version; incompatible document changes require another protocol version.

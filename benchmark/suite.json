@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "tasks": [
+    {
+      "name": "slugify",
+      "complexity": "small",
+      "fixture": "fixtures/slugify",
+      "prompt": "Implement Slugify in slugify.go. It must lowercase ASCII letters, turn each run of non-ASCII-alphanumeric characters into one hyphen, preserve Unicode letters and digits, and trim leading or trailing hyphens. Do not change the tests.",
+      "verify": [
+        "git diff --exit-code \"$(git rev-list --max-parents=0 HEAD)\" -- go.mod slugify_test.go",
+        "go test ./..."
+      ]
+    },
+    {
+      "name": "config-parser",
+      "complexity": "medium",
+      "fixture": "fixtures/config-parser",
+      "prompt": "Implement Parse in config.go. Parse UTF-8 KEY=VALUE lines, ignore blank lines and lines whose first non-space character is #, trim unquoted values, accept double-quoted values with \\\", \\\\ and \\n escapes, reject malformed lines, invalid keys, bad escapes, unterminated quotes, trailing text after a quote, and duplicate keys, and include the 1-based line number in errors. Do not change the tests.",
+      "verify": [
+        "git diff --exit-code \"$(git rev-list --max-parents=0 HEAD)\" -- go.mod config_test.go",
+        "go test ./..."
+      ]
+    },
+    {
+      "name": "bounded-jobs",
+      "complexity": "large",
+      "fixture": "fixtures/bounded-jobs",
+      "prompt": "Implement Run in queue.go as a bounded concurrent job runner. Validate workers > 0, execute at most workers jobs concurrently, return successful values in input order, stop scheduling new jobs after the first error or parent cancellation, cancel in-flight jobs through a derived context, wait for started jobs to return, and return the first job error by input order among errors observed. An empty job list succeeds. Do not change the tests.",
+      "verify": [
+        "git diff --exit-code \"$(git rev-list --max-parents=0 HEAD)\" -- go.mod queue_test.go",
+        "go test -race ./..."
+      ]
+    }
+  ]
+}

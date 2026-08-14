@@ -1,6 +1,6 @@
 # PXP — Plan eXecution Protocol
 
-PXP turns a reviewed YAML plan into a deterministic sequence of shell commands and Git patches. Planning stays with the coding agent; execution is performed by a small, auditable CLI with no model calls, telemetry, or automatic network access.
+PXP turns a reviewed YAML plan into a deterministic sequence of shell commands and Git patches. Planning stays with the coding agent; approval locks the exact plan bytes and Git commit; execution is performed by a small, auditable CLI with no model calls, telemetry, or automatic network access.
 
 > [!WARNING]
 > A PXP plan can run arbitrary shell commands with your user permissions. Read every plan and use PXP only with plans you trust. PXP is an executor, not a sandbox.
@@ -34,11 +34,14 @@ make build
 
 ## Quick start
 
-Create `plan.pxp.yaml`:
+Create `plan.pxp.yaml`, substituting the full output of `git rev-parse --verify 'HEAD^{commit}'` for the example `head`:
 
 ```yaml
-pxp_version: "1.0"
+pxp_version: "1.1"
 name: Add a greeting
+repository:
+  type: git
+  head: 0123456789abcdef0123456789abcdef01234567
 steps:
   - name: Add the file
     patch: |
@@ -53,18 +56,33 @@ steps:
       - test "$(cat hello.txt)" = "hello from PXP"
 ```
 
-Review it, then run:
+Review every byte, compute its SHA-256 with `sha256sum plan.pxp.yaml` on Linux or `shasum -a 256 plan.pxp.yaml` on macOS, and copy that fixed hash into the command:
 
 ```sh
-pxp run plan.pxp.yaml
+pxp run --expect-sha256 9f00000000000000000000000000000000000000000000000000000000000000 plan.pxp.yaml
 ```
 
-PXP validates the entire document before any mutation, locates the enclosing Git worktree, obtains a worktree lock, and refuses tracked changes unless `--allow-dirty` is explicit. Untracked and ignored files are allowed, so an untracked plan can be executed. Commands run sequentially in fresh non-interactive Bash processes. Patches are checked with Git before they are applied.
+The displayed hash is intentionally illustrative; use the exact hash you reviewed, never that value. If the file changes after approval, the command fails before opening the repository. PXP then obtains a worktree lock, verifies the declared Git HEAD, and refuses tracked changes unless `--allow-dirty` is explicit. Untracked and ignored files are allowed, so an untracked plan can be executed. Commands run sequentially in fresh non-interactive Bash processes. Patches are checked with Git before they are applied.
+
+```text
+PLAN
+  AI reasoning allowed
+        ↓
+  complete PXP artifact
+
+APPROVE
+  lock exact plan hash
+  lock expected repository HEAD
+
+APPLY
+  PXP only; zero LLM
+  stop on any deviation
+```
 
 ## CLI
 
 ```text
-pxp run [--allow-dirty] <plan.pxp.yaml|->
+pxp run [--allow-dirty] [--expect-sha256 HASH] <plan.pxp.yaml|->
 pxp help [run|version]
 pxp version
 pxp -h
@@ -72,13 +90,19 @@ pxp --help
 pxp --version
 ```
 
-Use `-` to read a plan from standard input. File inputs must be non-symlink regular files. Child commands never receive the plan stream as interactive input. Lifecycle messages go to standard error; command output is streamed unchanged. PXP reports command ordinals but never echoes command contents.
+Use `--expect-sha256` to make an independently approved, 64-character lowercase SHA-256 a precondition. Use `-` to read a plan from standard input. File inputs must be non-symlink regular files. Child commands never receive the plan stream as interactive input. Lifecycle messages go to standard error; command output is streamed unchanged. PXP reports command ordinals but never echoes command contents.
 
 Exit codes are stable: `0` success, `2` usage, `3` input/schema error, `4` precondition error, `5` execution failure, `70` internal error, and `130`/`143` for interrupted processes.
 
 ## Protocol and migration
 
-The normative v1 behavior is in [SPEC.md](SPEC.md), with a machine-readable companion at [schema/pxp-v1.schema.json](schema/pxp-v1.schema.json). Older `main-v0.1` and `develop-v0.1` documents are intentionally rejected by `pxp`; convert them with the separately shipped `pxp-convert` tool described in [MIGRATION.md](MIGRATION.md).
+The normative behavior is in [SPEC.md](SPEC.md), with machine-readable companions for [PXP 1.1](schema/pxp-v1.1.schema.json) and [PXP 1.0](schema/pxp-v1.schema.json). PXP 1.1 requires exact Git HEAD binding. Existing PXP 1.0 plans remain valid but are explicitly unbound. Older `main-v0.1` and `develop-v0.1` documents are intentionally rejected by `pxp`; convert them with the separately shipped `pxp-convert` tool described in [MIGRATION.md](MIGRATION.md).
+
+## Agent integrations and benchmarks
+
+Thin skills for Claude Code and Codex keep AI activity in the planning phase and stop after producing a closed plan. See [agent integration setup](docs/integrations.md) for copy-pastable installation and approval examples.
+
+`pxp-bench` compares one-shot normal agent execution with one-shot agent planning followed by hash-locked PXP execution. It records agent-reported tokens and tool events when available, harness-measured durations and outcomes, and `null` for unavailable metrics. See the [benchmark guide](benchmark/README.md) for the reproducible fixtures, commands, report schema, and security caveats.
 
 PXP does not roll back shell commands or patches after a later step fails. Commit or stash important work first and follow [recovery guidance](docs/recovery.md) if execution stops partway through.
 
