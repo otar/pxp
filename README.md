@@ -88,6 +88,8 @@ One command verifies the plan and begins the work. PXP does not pause between pa
 
 PXP makes no model calls during execution. You spend model tokens while reasoning improves the plan, not while a model repeatedly observes and confirms work that was already specified.
 
+Routine command and patch output also stays out of the model context unless you bring a failure back for diagnosis.
+
 If a plan fails, PXP stops. Inspect the workspace, resolve the new uncertainty, and produce a new complete plan. PXP never hides adaptation inside execution.
 
 ### You review the complete change
@@ -144,7 +146,7 @@ make build
 
 ### 3. Connect your coding agent
 
-PXP includes instruction-only skills for Codex and Claude Code. These commands install a skill for your user from this repository checkout.
+PXP includes instruction-only skills for Codex and Claude Code. These are bundled integrations, not a compatibility boundary: any coding agent capable of producing YAML and unified Git diffs can create a PXP plan. The following commands install the corresponding skill from this repository checkout for the current user.
 
 For Codex:
 
