@@ -19,7 +19,7 @@ For one repository instead, copy it to `.claude/skills/pxp/SKILL.md` in that rep
 /pxp Implement the requested change and compile it into a complete PXP plan.
 ```
 
-Claude Code may read files and run read-only investigation commands. The skill instructs it to write only `plan.pxp.yaml`; it must not change source files or run PXP. The skill pre-approves only read-only Git commands and checksum commands, so the plan-file write still follows the user's normal permission policy.
+Claude Code may read files and run read-only investigation commands. The skill instructs it to write only `plan.pxp.yaml`; it must not change source files or run PXP. The skill pre-approves only read-only Git commands, so the plan-file write still follows the user's normal permission policy.
 
 ## Codex
 
@@ -38,14 +38,34 @@ $pxp Implement the requested change and compile it into a complete PXP plan.
 
 The skill complements normal `AGENTS.md` discovery; repository instructions still apply. It limits its mutation to `plan.pxp.yaml` and must not execute the plan.
 
-## Review, approve, and apply
+## Review and apply
 
-Both skills produce PXP 1.1 and report two identifiers:
+Both skills produce PXP 1.1 and report:
 
 - `repository.head`: the full `HEAD^{commit}` used during planning;
-- the SHA-256 of the exact saved plan bytes.
+- the path to the saved plan.
 
-Review the complete file. Independently confirm the hash:
+Review the complete file:
+
+```sh
+less plan.pxp.yaml
+```
+
+Then run it:
+
+```sh
+pxp run plan.pxp.yaml
+```
+
+PXP validates the complete plan and checks Git HEAD while holding the worktree lock before any step. A mismatch stops with exit 4.
+
+If a plan step fails, PXP stops and earlier mutations remain. Return to a separate planning phase, produce a new complete plan, and review it; do not ask the agent to repair or continue during execution.
+
+This boundary guarantees the initial Git HEAD, not deterministic results from arbitrary shell commands. Commands can still observe clocks, files outside Git, environment variables, networks, package registries, or concurrently changing external systems.
+
+## Optional exact plan pinning
+
+When review and execution are separated by time, tooling, or people, `--expect-sha256` can require the exact reviewed plan bytes. Calculate the hash after reviewing the file:
 
 ```sh
 # Linux
@@ -55,12 +75,12 @@ sha256sum plan.pxp.yaml
 shasum -a 256 plan.pxp.yaml
 ```
 
-Then paste the reviewed hash as a fixed literal; do not compute it inline as part of the run command:
+Pass the reviewed hash as a fixed literal:
 
 ```sh
 pxp run --expect-sha256 COPY_THE_REVIEWED_64_CHARACTER_HASH_HERE plan.pxp.yaml
 ```
 
-PXP checks the byte hash before it opens the repository and checks Git HEAD while holding the PXP lock before any step. Any mismatch stops with exit 4. If a plan step fails, PXP stops and earlier mutations remain. Return to a separate planning phase, produce a new complete plan, and review a new hash; do not ask the agent to repair or continue during execution.
+Compute the hash after review and do not recompute it inline in the run command; inline computation does not preserve a separate approval boundary.
 
-This boundary guarantees exact plan identity and initial Git HEAD, not deterministic results from arbitrary shell commands. Commands can still observe clocks, files outside Git, environment variables, networks, package registries, or concurrently changing external systems.
+The hash pins exact plan identity but does not authenticate the planner or reviewer. Human review remains the source of trust.

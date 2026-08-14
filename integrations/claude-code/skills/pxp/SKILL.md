@@ -2,7 +2,7 @@
 name: pxp
 description: Create a complete, reviewable PXP plan for a coding task without modifying source files or executing the plan.
 disable-model-invocation: true
-allowed-tools: Read Grep Glob Bash(git rev-parse *) Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git ls-files *) Bash(sha256sum plan.pxp.yaml) Bash(shasum -a 256 plan.pxp.yaml)
+allowed-tools: Read Grep Glob Bash(git rev-parse *) Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git ls-files *)
 ---
 
 # Create a closed PXP plan
@@ -35,7 +35,7 @@ Use this skill when the user wants Claude Code to investigate a repository and c
          - command that exits non-zero on failure
    ```
 
-6. Re-read the saved bytes and compute their SHA-256. Use `sha256sum plan.pxp.yaml` when available, otherwise `shasum -a 256 plan.pxp.yaml`. Report the exact lowercase hash, repository HEAD, plan path, and a literal command of the form `pxp run --expect-sha256 HASH plan.pxp.yaml`.
-7. Stop. Do not run PXP, apply the diff, execute plan steps, or continue with an automatic fix. The human must review the complete file and approve that exact hash. If PXP later stops, a new planning turn and a newly approved plan are required.
+6. Report the repository HEAD, plan path, and a literal command of the form `pxp run plan.pxp.yaml`.
+7. Stop. Do not run PXP, apply the diff, execute plan steps, or continue with an automatic fix. The human must review the complete file before execution. If PXP later stops, a new planning turn and a newly reviewed plan are required.
 
 PXP execution is deterministic control flow, not a guarantee that arbitrary shell commands or external systems behave deterministically. Earlier mutations remain if a later step fails.

@@ -38,4 +38,4 @@ Rules:
 - Do not assume rollback. Tell the user that prior mutations remain if a later step fails.
 - Never place credentials or secret values in the plan.
 
-After saving the plan, compute its exact SHA-256 without executing it and tell the user: `Plan saved to plan.pxp.yaml. Review and execute with pxp run --expect-sha256 <reviewed-hash> plan.pxp.yaml`.
+After saving the plan, report its path and bound repository HEAD without executing it. Tell the user: `Plan saved to plan.pxp.yaml. Review and execute with pxp run plan.pxp.yaml`.

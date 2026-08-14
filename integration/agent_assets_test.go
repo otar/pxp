@@ -25,13 +25,18 @@ func TestAgentIntegrationSkillsEnforcePlanningExecutionBoundary(t *testing.T) {
 				`name: pxp`,
 				`pxp_version: "1.1"`,
 				`git rev-parse --verify 'HEAD^{commit}'`,
-				`--expect-sha256 HASH`,
+				`pxp run plan.pxp.yaml`,
 				`Do not modify source files`,
 				`Do not run PXP`,
-				`newly approved plan`,
+				`newly reviewed plan`,
 			} {
 				if !strings.Contains(text, required) {
 					t.Errorf("missing required integration contract %q", required)
+				}
+			}
+			for _, forbidden := range []string{`--expect-sha256`, `sha256sum`, `shasum -a 256`} {
+				if strings.Contains(text, forbidden) {
+					t.Errorf("default integration contract contains optional hash workflow %q", forbidden)
 				}
 			}
 			if strings.Contains(text, "automatic fix") && !strings.Contains(text, "Do not run PXP") {

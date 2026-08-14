@@ -4,4 +4,4 @@ For implementation work, analyze the repository and ask only material clarificat
 
 Each step has an optional `name` and exactly one operation: `run` as a sequence of non-interactive Bash command strings, or `patch` as a unified Git diff. Use repository-relative paths, include verification steps, and keep the plan reviewable. Do not include secrets.
 
-Compute and report the exact plan SHA-256, but do not execute the plan. Finish with: `Plan saved to plan.pxp.yaml. Review and execute with pxp run --expect-sha256 <reviewed-hash> plan.pxp.yaml`.
+Report the plan path and bound repository HEAD, but do not execute the plan. Finish with: `Plan saved to plan.pxp.yaml. Review and execute with pxp run plan.pxp.yaml`.

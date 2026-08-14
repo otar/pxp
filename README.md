@@ -4,7 +4,7 @@
 
 PXP is the handoff from AI reasoning to local execution.
 
-Use your coding agent to investigate the repository, challenge assumptions, and remove ambiguity. When the task is fully understood, have the agent encode the entire change—patches, commands, and checks—in one YAML plan. Review it, approve its exact SHA-256, and let PXP run it.
+Use your coding agent to investigate the repository, challenge assumptions, and remove ambiguity. When the task is fully understood, have the agent encode the entire change—patches, commands, and checks—in one YAML plan. Review it, then let PXP run it.
 
 No model calls between steps. No waiting for the agent to rediscover what it already decided. No tokens spent narrating a plan that is already complete.
 
@@ -28,7 +28,7 @@ flowchart TB
 
     subgraph pxp["PXP execution"]
         direction LR
-        PC["Clarify with the agent"] --> PP["Complete plan"] --> PR["Review + approve hash"] --> PE["Execute locally"]
+        PC["Clarify with the agent"] --> PP["Complete plan"] --> PR["Review the complete plan"] --> PE["Execute locally"]
     end
 ```
 
@@ -90,24 +90,23 @@ PXP makes no model calls during execution. You spend model tokens while reasonin
 
 If a plan fails, PXP stops. Inspect the workspace, resolve the new uncertainty, and produce a new complete plan. PXP never hides adaptation inside execution.
 
-### You approve the complete change
+### You review the complete change
 
-A PXP plan contains every patch and shell command that will run. Before the first step starts, PXP can bind your approval to:
+A PXP plan contains every patch and shell command that will run. You can inspect the whole change before the first step starts.
 
-- the SHA-256 of the exact plan file;
-- the exact Git commit used during planning.
+PXP validates the complete plan before execution. PXP 1.1 also verifies the exact Git commit used during planning, so a stale plan stops instead of running against a different revision.
 
-If either value changes, PXP stops before it runs a plan step.
+For workflows where review and execution are separate, `--expect-sha256` can optionally pin execution to the exact reviewed plan bytes.
 
 ## How it works
 
 ```text
 CODING AGENT                 YOU                         PXP
 
-inspect the repository       review the complete plan    verify the plan hash
+inspect the repository       review the complete plan    validate the complete plan
 resolve ambiguity      →     inspect every step     →    verify the Git commit
-write plan.pxp.yaml          approve one SHA-256          apply steps in order
-stop planning                                             make no model calls
+write plan.pxp.yaml          approve the plan             apply steps in order
+stop planning                run one command              make no model calls
 ```
 
 The agent is present during planning. It is not present during execution. PXP applies the approved steps in order and stops at the first failure; it does not adapt the plan after execution starts.
@@ -177,7 +176,7 @@ In Claude Code:
 /pxp Implement the requested change and compile it into a complete PXP plan.
 ```
 
-The skill lets the agent inspect the repository. The agent writes only `plan.pxp.yaml`, reports its hash, and stops. It does not edit source files or run PXP.
+The skill lets the agent inspect the repository. The agent writes only `plan.pxp.yaml`, reports its path and bound Git commit, and stops. It does not edit source files or run PXP.
 
 ### 5. Review and run
 
@@ -187,7 +186,17 @@ Read the complete plan. Check every patch and command.
 less plan.pxp.yaml
 ```
 
-Calculate the SHA-256 yourself after the review:
+Then run it:
+
+```sh
+pxp run plan.pxp.yaml
+```
+
+PXP validates the plan and checks its expected Git commit before the first step. A mismatch stops execution.
+
+### Optional: pin exact plan bytes
+
+If review and execution happen at different times or by different people, you can additionally require the exact reviewed file. Calculate its SHA-256 after review:
 
 ```sh
 # Linux
@@ -197,15 +206,15 @@ sha256sum plan.pxp.yaml
 shasum -a 256 plan.pxp.yaml
 ```
 
-Copy the reviewed hash into the command as a fixed value:
+Then pass the reviewed hash as a fixed value:
 
 ```sh
 pxp run --expect-sha256 COPY_THE_REVIEWED_64_CHARACTER_HASH_HERE plan.pxp.yaml
 ```
 
-Do not calculate the hash inside the `pxp run` command. Approval and execution must remain separate.
+Compute the hash after review and pass it literally. Computing it inline in the run command does not preserve a separate approval boundary.
 
-PXP checks the hash before it opens the repository. It checks the expected Git commit while it holds the worktree lock. A mismatch stops execution before the first plan step.
+With this option, PXP compares the hash before it opens the repository. A mismatch stops execution before the first plan step.
 
 ## Plan format
 
@@ -259,7 +268,7 @@ PXP is an executor, not a sandbox. It does not make unsafe commands safe. Plan c
 
 PXP does not roll back. If a later step fails, earlier commands and patches remain. Commit or stash important work before execution. Use `--allow-dirty` only when you understand how the plan interacts with existing changes.
 
-The plan hash identifies the exact approved file. Git binding identifies the expected starting commit. These checks do not freeze untracked files, external services, time, network responses, or changes from unrelated processes.
+Git binding identifies the expected starting commit. When you use `--expect-sha256`, the supplied hash also identifies the exact reviewed plan file. These checks do not freeze untracked files, external services, time, network responses, or changes from unrelated processes.
 
 Follow the [security policy](SECURITY.md) and the [recovery guide](docs/recovery.md) for more information.
 
